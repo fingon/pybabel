@@ -9,8 +9,8 @@
 # Copyright (c) 2015 Markus Stenberg
 #
 # Created:       Wed Mar 25 05:19:23 2015 mstenber
-# Last modified: Wed Mar 25 10:05:42 2015 mstenber
-# Edit time:     28 min
+# Last modified: Wed Mar 25 10:14:02 2015 mstenber
+# Edit time:     33 min
 #
 """
 
@@ -169,12 +169,18 @@ def decode_tlvs(x):
             yield _tlvs[tlv.t].decode(x, i)
         i += tlv.size() + tlv.l
 
-def ipv6_to_tlv_args(ip):
+# Conversion of addresses:
+# local -> local
+
+def ip_to_tlv_args(ip):
+    if ip.is_link_local:
+        return ll_to_tlv_args(ip)
     b = ip.packed
-    return {'ae': 2, 'body': b}
+    return {'ae': len(b) == 4 and 1 or 2, 'body': b}
 
 def ll_to_tlv_args(ip):
     b = ip.packed[8:]
+    assert b # better have been IPv6..
     return {'ae': 3, 'body': b}
 
 def prefix_to_tlv_args(prefix):
@@ -182,6 +188,8 @@ def prefix_to_tlv_args(prefix):
     plen = (oplen+7)//8
     b = prefix.network_address.packed[:plen]
     return {'ae': isinstance(prefix, ipaddress.IPv4Network) and 1 or 2, 'plen': oplen, 'body': b}
+
+# TLV -> local
 
 def tlv_to_prefix(tlv):
     if tlv.ae == 1:
@@ -191,3 +199,10 @@ def tlv_to_prefix(tlv):
         b = tlv.body + bytes(16 - len(tlv.body))
     na = ipaddress.ip_address(b)
     return ipaddress.ip_network('%s/%d' % (na.compressed, tlv.plen))
+
+def tlv_to_ip_or_ll(tlv):
+    if tlv.ae in [1, 2]:
+        return ipaddress.ip_address(tlv.body)
+    assert tlv.ae == 3
+    b = ipaddress.ip_address('fe80::').packed[:8] + tlv.body
+    return ipaddress.ip_address(b)

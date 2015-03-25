@@ -9,8 +9,8 @@
 # Copyright (c) 2015 Markus Stenberg
 #
 # Created:       Wed Mar 25 05:23:14 2015 mstenber
-# Last modified: Wed Mar 25 10:03:53 2015 mstenber
-# Edit time:     18 min
+# Last modified: Wed Mar 25 10:13:45 2015 mstenber
+# Edit time:     21 min
 #
 """
 
@@ -62,3 +62,13 @@ def test_prefix():
     t = PadN(**prefix_to_tlv_args(p))
     p2 = tlv_to_prefix(t)
     assert p == p2
+
+def test_ip_ll():
+    for a in [ipaddress.ip_address('fe80::1'),
+              ipaddress.ip_address('dead:beef::2'),
+              ipaddress.ip_address('1.2.3.4')]:
+        t = PadN(**ip_to_tlv_args(a))
+        a2 = tlv_to_ip_or_ll(t)
+        assert a == a2
+
+
