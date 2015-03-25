@@ -9,8 +9,8 @@
 # Copyright (c) 2015 Markus Stenberg
 #
 # Created:       Wed Mar 25 03:48:40 2015 mstenber
-# Last modified: Wed Mar 25 14:02:38 2015 mstenber
-# Edit time:     290 min
+# Last modified: Wed Mar 25 14:36:24 2015 mstenber
+# Edit time:     291 min
 #
 """
 
@@ -388,7 +388,7 @@ class Babel:
             # MUST send update in timely manner if rid changes
             if d2['r']['rid'] != d['r']['rid']:
                 self.queue_update(prefix, d, URGENT_JITTER)
-        for prefix, d2 in self.selected_routes.items():
+        for prefix, d in self.selected_routes.items():
             if prefix in sr:
                 continue
             # SHOULD send if route redacted

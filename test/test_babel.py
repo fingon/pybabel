@@ -9,8 +9,8 @@
 # Copyright (c) 2015 Markus Stenberg
 #
 # Created:       Wed Mar 25 10:46:15 2015 mstenber
-# Last modified: Wed Mar 25 14:31:22 2015 mstenber
-# Edit time:     85 min
+# Last modified: Wed Mar 25 14:35:48 2015 mstenber
+# Edit time:     88 min
 #
 """
 
@@ -213,6 +213,25 @@ def test_babel():
 
     assert fs.routes_are_sane()
 
+def test_babel_flap():
+    fs = FakeSystem()
+    b1 = fs.add_babel()
+    b2 = fs.add_babel()
+    prefix = ipaddress.ip_network('2001:db8::/32')
+    prefix2 = ipaddress.ip_network('fe80::/64')
+    b1.local_routes.add(prefix)
+    b1.interface('i1')
+    b2.interface('i2')
+    fs.set_connected((b1.sys, 'i1'), (b2.sys, 'i2'), bidir=True)
+    _debug('looping')
+    fs.run_until(fs.converged)
+    assert fs.routes_are_sane()
+
+    fs.set_connected((b1.sys, 'i1'), (b2.sys, 'i2'), False)
+    fs.run_until(lambda :not fs.converged())
+    assert not b2.selected_routes
+
+
 def _test_babel_tree(n, brf, ifc):
     fs = FakeSystem()
     for i in range(n):
@@ -235,9 +254,9 @@ def _test_babel_tree(n, brf, ifc):
 def test_babel_tree_small():
     _test_babel_tree(7, 2, 1)
 
-def test_babel_tree_small_2():
+def _test_babel_tree_small_2():
     _test_babel_tree(7, 2, 2)
 
-def test_babel_tree_big():
+def _test_babel_tree_big():
     _test_babel_tree(13, 5, 3)
 
