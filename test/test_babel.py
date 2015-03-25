@@ -9,8 +9,8 @@
 # Copyright (c) 2015 Markus Stenberg
 #
 # Created:       Wed Mar 25 10:46:15 2015 mstenber
-# Last modified: Wed Mar 25 13:50:30 2015 mstenber
-# Edit time:     59 min
+# Last modified: Wed Mar 25 14:31:22 2015 mstenber
+# Edit time:     85 min
 #
 """
 
@@ -62,6 +62,7 @@ class FakeSystem:
     def __init__(self):
         self.timeouts = []
         self.babels = []
+        self.ip2b = {}
         self.connections = collections.defaultdict(set)
         # (s, ifname) => [(s2, ifname2) list]
     def add_babel(self):
@@ -70,7 +71,7 @@ class FakeSystem:
         self.babels.append(b)
         fsi.b = b
         return b
-    def set_connected(self, k1, k2, enabled=True):
+    def set_connected(self, k1, k2, enabled=True, bidir=False):
         l = self.connections[k1]
         if k2 in l == enabled:
             return
@@ -78,6 +79,8 @@ class FakeSystem:
             l.remove(k2)
         else:
             l.add(k2)
+        if bidir:
+            self.set_connected(k2, k1, enabled)
     def poll(self):
         while True:
             l = [x for x in self.timeouts if x.t <= self.t]
@@ -100,6 +103,40 @@ class FakeSystem:
             self.poll()
             iteration += 1
             assert iteration < max_iterations
+    def routes_are_sane(self):
+        # Make sure that for any selected routes, they wind up at the
+        # source with local_routes set for the prefix
+        for b in self.babels:
+            for p, d in b.selected_routes.items():
+                if not self.route_is_sane(b, p):
+                    return False
+        return True
+    def route_is_sane(self, b, p, hopcount=64):
+        d = b.selected_routes[p]
+        n = d.get('n')
+        if not n:
+            assert p in b.local_routes
+            return True
+        if not hopcount:
+            return
+        return self.route_is_sane(self.ip2b[n.ip], p, hopcount-1)
+    def converged(self):
+        bl = self.babels
+        # All local routes must be published
+        for i, b in enumerate(bl):
+            if len(b.selected_routes) < len(b.local_routes):
+                _debug('_converged .. not. missing local routes at #%d %s.', i, b)
+                return False
+        # Have to have same set of selected routes
+        for i in range(1, len(bl)):
+            k1 = bl[0].selected_routes.keys()
+            k2 = bl[i].selected_routes.keys()
+            if k1 != k2:
+                _debug('_converged .. not: route key delta %s<>%s' % (k1, k2))
+                return False
+        return True
+
+
 
 class FakeSystemInterface(SystemInterface):
     def __init__(self, fs):
@@ -124,6 +161,7 @@ class FakeSystemInterface(SystemInterface):
         b = a.packed[:-2] + bytes([self.sid, self.iid])
         ip = ipaddress.ip_address(b)
         self.ips[ifname] = ip
+        self.fs.ip2b[ip] = self.b
         return ip
     def send_unicast(self, ifname, ip, b):
         for k in self.fs.connections[self,ifname]:
@@ -140,22 +178,6 @@ class FakeSystemInterface(SystemInterface):
             self.call_later(d, s2.b.process_inbound,
                             ifname2, self.ips[ifname], b)
 
-
-def _converged(*bl):
-    # All local routes must be published
-    for b in bl:
-        if len(b.selected_routes) < len(b.local_routes):
-            _debug('_converged .. not. missing local routes at %s.', b)
-            return False
-    # Have to have same set of selected routes
-    for i in range(1, len(bl)):
-        k1 = bl[0].selected_routes.keys()
-        k2 = bl[i].selected_routes.keys()
-        if k1 != k2:
-            _debug('_converged .. not: route key delta %s<>%s' % (k1, k2))
-            return False
-    return True
-
 def test_babel():
     fs = FakeSystem()
     b1 = fs.add_babel()
@@ -165,10 +187,9 @@ def test_babel():
     b1.local_routes.add(prefix)
     b1.interface('i1')
     b2.interface('i2')
-    fs.set_connected((b1.sys, 'i1'), (b2.sys, 'i2'))
-    fs.set_connected((b2.sys, 'i2'), (b1.sys, 'i1'))
+    fs.set_connected((b1.sys, 'i1'), (b2.sys, 'i2'), bidir=True)
     _debug('looping')
-    fs.run_until(_converged, *fs.babels)
+    fs.run_until(fs.converged)
     assert b1.selected_routes[prefix]['n'] is None
     n2 = b2.selected_routes[prefix]['n']
     assert n2 is not None
@@ -189,4 +210,34 @@ def test_babel():
     rr = RouteReq(**prefix_to_tlv_args(prefix))
     ifo.process_tlvs(add, [rr])
     assert ifo.tlv_q[-1].metric != INF
+
+    assert fs.routes_are_sane()
+
+def _test_babel_tree(n, brf, ifc):
+    fs = FakeSystem()
+    for i in range(n):
+        b = fs.add_babel()
+        j = i // brf
+        if i == j:
+            # root-ish
+            continue
+        ifn = 'down%d' % (i % brf % ifc)
+        b2 = fs.babels[j]
+        fs.set_connected((b2.sys, ifn), (b.sys, 'up'), bidir=True)
+        b.interface('up')
+        b2.interface(ifn)
+        # Add one local route to each node
+        prefix = ipaddress.ip_network('2001:db8:%d::/48' % i)
+        b.local_routes.add(prefix)
+    fs.run_until(fs.converged, max_iterations=10000)
+    assert fs.routes_are_sane()
+
+def test_babel_tree_small():
+    _test_babel_tree(7, 2, 1)
+
+def test_babel_tree_small_2():
+    _test_babel_tree(7, 2, 2)
+
+def test_babel_tree_big():
+    _test_babel_tree(13, 5, 3)
 
