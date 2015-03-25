@@ -9,8 +9,8 @@
 # Copyright (c) 2015 Markus Stenberg
 #
 # Created:       Wed Mar 25 10:46:15 2015 mstenber
-# Last modified: Wed Mar 25 13:29:54 2015 mstenber
-# Edit time:     50 min
+# Last modified: Wed Mar 25 13:50:30 2015 mstenber
+# Edit time:     59 min
 #
 """
 
@@ -61,9 +61,15 @@ class FakeSystem:
     sid = 0
     def __init__(self):
         self.timeouts = []
-
+        self.babels = []
         self.connections = collections.defaultdict(set)
         # (s, ifname) => [(s2, ifname2) list]
+    def add_babel(self):
+        fsi = FakeSystemInterface(self)
+        b = Babel(fsi)
+        self.babels.append(b)
+        fsi.b = b
+        return b
     def set_connected(self, k1, k2, enabled=True):
         l = self.connections[k1]
         if k2 in l == enabled:
@@ -135,39 +141,52 @@ class FakeSystemInterface(SystemInterface):
                             ifname2, self.ips[ifname], b)
 
 
+def _converged(*bl):
+    # All local routes must be published
+    for b in bl:
+        if len(b.selected_routes) < len(b.local_routes):
+            _debug('_converged .. not. missing local routes at %s.', b)
+            return False
+    # Have to have same set of selected routes
+    for i in range(1, len(bl)):
+        k1 = bl[0].selected_routes.keys()
+        k2 = bl[i].selected_routes.keys()
+        if k1 != k2:
+            _debug('_converged .. not: route key delta %s<>%s' % (k1, k2))
+            return False
+    return True
+
 def test_babel():
     fs = FakeSystem()
-    def _add_babel():
-        fsi = FakeSystemInterface(fs)
-        b = Babel(fsi)
-        fsi.b = b
-        return b
-    b1 = _add_babel()
-    b2 = _add_babel()
+    b1 = fs.add_babel()
+    b2 = fs.add_babel()
     prefix = ipaddress.ip_network('2001:db8::/32')
+    prefix2 = ipaddress.ip_network('fe80::/64')
     b1.local_routes.add(prefix)
     b1.interface('i1')
     b2.interface('i2')
     fs.set_connected((b1.sys, 'i1'), (b2.sys, 'i2'))
     fs.set_connected((b2.sys, 'i2'), (b1.sys, 'i1'))
     _debug('looping')
-    def _converged(*bl):
-        # All local routes must be published
-        for b in bl:
-            if len(b.selected_routes) < len(b.local_routes):
-                _debug('_converged .. not. missing local routes at %s.', b)
-                return False
-        # Have to have same set of selected routes
-        for i in range(1, len(bl)):
-            k1 = bl[0].selected_routes.keys()
-            k2 = bl[i].selected_routes.keys()
-            if k1 != k2:
-                _debug('_converged .. not: route key delta %s<>%s' % (k1, k2))
-                return False
-        return True
-    fs.run_until(_converged, b1, b2)
+    fs.run_until(_converged, *fs.babels)
     assert b1.selected_routes[prefix]['n'] is None
     n2 = b2.selected_routes[prefix]['n']
     assert n2 is not None
     assert n2.ip == b1.interface('i1').ip
+
+    # Ok, test some particular claims in the RFC.
+    ifo = b1.interface('i1')
+    ifo.tlv_q = []
+    rr = RouteReq(ae=0)
+    add = ipaddress.ip_address('2001:db8::1')
+    ifo.process_tlvs(add, [rr])
+    assert ifo.tlv_q[-1].metric != INF
+
+    rr = RouteReq(**prefix_to_tlv_args(prefix2))
+    ifo.process_tlvs(add, [rr])
+    assert ifo.tlv_q[-1].metric == INF
+
+    rr = RouteReq(**prefix_to_tlv_args(prefix))
+    ifo.process_tlvs(add, [rr])
+    assert ifo.tlv_q[-1].metric != INF
 

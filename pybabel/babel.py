@@ -9,8 +9,8 @@
 # Copyright (c) 2015 Markus Stenberg
 #
 # Created:       Wed Mar 25 03:48:40 2015 mstenber
-# Last modified: Wed Mar 25 13:26:43 2015 mstenber
-# Edit time:     278 min
+# Last modified: Wed Mar 25 14:02:38 2015 mstenber
+# Edit time:     290 min
 #
 """
 
@@ -35,6 +35,8 @@ ROUTE_EXPIRY_TIME_MULTIPLIER = 3.5
 SOURCE_GC_TIME = 3 * 60
 URGENT_JITTER = 0.2
 HOP_COUNT = 16
+
+MTU_ISH = 1400 # random MTU we use for splitting TLVs when we send stuff
 
 RECENT_HELLO_TIME = 60 # TBD - not clear in RFC!
 
@@ -87,6 +89,25 @@ class TLVQueuer:
     def get_sys(self):
         raise NotImplementedError
 
+def split_tlvs_to_tlv_lists(tlvs):
+    c = 4 # packet header
+    l = []
+    for tlv in tlvs:
+        tl = len(tlv.encode())
+        if tl + c > MTU_ISH:
+            yield l
+            c = 4
+            l = []
+        c += tl
+        l.append(tlv)
+    if l:
+        yield l
+
+def split_tlvs_to_packets(tlvs):
+    # SHOULD maximize size, but MUST NOT send larger than ..
+    for tlvs in split_tlvs_to_tlv_lists(tlvs):
+        yield Packet(tlvs=tlvs).encode()
+
 class BabelNeighbor(TLVQueuer):
     " A neighbor on BabelInterface "
     transmission_cost = INF
@@ -104,8 +125,8 @@ class BabelNeighbor(TLVQueuer):
     def get_sys(self):
         return self.i.get_sys()
     def send_tlvs(self, tlvs):
-        self.get_sys().send_unicast(self.i.ifname, self.ip,
-                                    Packet(tlvs=tlvs).encode())
+        for b in split_tlvs_to_packets(tlvs):
+            self.get_sys().send_unicast(self.i.ifname, self.ip, b)
     def process_hello(self, tlv):
         _debug('%s process_hello', self)
         self.last_hello = self.get_sys().time()
@@ -138,11 +159,13 @@ class BabelNeighbor(TLVQueuer):
         self.transmission_cost = v
         self.i.b.route_selection()
     def get_reception_cost(self):
+        # Strictly speaking, this should be in get_cost, but this works too
         if (self.get_sys().time() - self.last_hello) > RECENT_HELLO_TIME:
             return INF
         # TBD: real rxcost calc
         return 1
     def get_cost(self):
+        # 3.4.3
         if self.transmission_cost == INF:
             return INF
         rxcost = self.get_reception_cost()
@@ -291,9 +314,8 @@ class BabelInterface(TLVQueuer):
             n.queue_ihu()
         self.seqno = (self.seqno + 1) & 0xFFFF
     def send_tlvs(self, tlvs):
-        self.get_sys().send_multicast(self.ifname,
-                                      Packet(tlvs=tlvs).encode())
-
+        for b in split_tlvs_to_packets(tlvs):
+            self.get_sys().send_multicast(self.ifname, b)
 
 class Babel:
     def __init__(self, sys):
@@ -324,8 +346,16 @@ class Babel:
             assert ip
             self.ifs[name] = BabelInterface(self, name, ip)
         return self.ifs[name]
-    def process_inbound(self, ifname, address, p):
-        self.interface(ifname).process_tlvs(address, Packet.decode(p).tlvs)
+    def process_inbound(self, ifname, address, b):
+        # 4: non-link-local MUST be ignored
+        if not address.is_link_local:
+            return
+        try:
+            p = Packet.decode(b)
+        except:
+            _debug('process_inbound - decode failure')
+            return
+        self.interface(ifname).process_tlvs(address, p.tlvs)
     def route_selection(self):
         _debug('%s Babel.route_selection' % self)
         # 3.6
@@ -368,7 +398,8 @@ class Babel:
                            hopcount=HOP_COUNT,
                            rid=d['r']['rid'],
                            **prefix_to_tlv_args(prefix))
-            self.queue_tlv(tlv)
+            # SHOULD be sent in timely manner
+            self.queue_tlv(tlv, URGENT_JITTER)
         self.selected_routes = sr
     def maintain_feasibility(self, prefix, d):
         # 3.7.3 maintain feasibility distance
@@ -407,16 +438,17 @@ class Babel:
         self.maintain_feasibility(prefix, d)
         self.queue_update_tlv(prefix, d, *a)
     def queue_update_tlv(self, prefix, d, *a):
-        self.queue_tlv(RID(rid=d['r']['rid']))
+        if 'rid' in d.get('r', {}):
+            self.queue_tlv(RID(rid=d['r']['rid']))
         self.queue_tlv(self.to_update_tlv(prefix, d), *a)
 
     def to_update_tlv(self, prefix, d):
         flags = 0
         omitted = 0
         interval = UPDATE_INTERVAL
-        r = d['r']
+        r = d.get('r', {})
         u = Update(flags=flags, omitted=omitted, interval=_t2b(interval),
-                   seqno=r['seqno'], metric=d['metric'],
+                   seqno=r.get('seqno', 0), metric=d['metric'],
                    **prefix_to_tlv_args(prefix))
         return u
     def process_route_req_i(self, i, tlv):
@@ -429,7 +461,7 @@ class Babel:
         # MUST send an update to individual req.
         prefix = tlv_to_prefix(tlv)
         d = self.selected_routes.get(prefix)
-        d = d or {'metric': INF, 'r': {'seqno': 0}}
+        d = d or {'metric': INF}
         self.queue_update_tlv(prefix, d)
     def process_seqno_req_n(self, n, tlv):
         i = n.i
@@ -451,6 +483,7 @@ class Babel:
                 self.queue_update_tlv(prefix, d)
                 return
             if tlv.hopcount >= 2:
+                best = None
                 for i2 in self.ifs.values():
                     for n2 in i2.neighs.values():
                         r2 = n2.routes.get(prefix)
@@ -458,9 +491,12 @@ class Babel:
                         if r2['metric'] == INF: continue
                         if n2.get_cost() == INF: continue
                         if n2 == n: continue
-                        tlv2 = SeqnoReq(seqno=tlv.seqno,
-                                        hopcount=tlv.hopcount-1,
-                                        rid=tlv.rid,
-                                        **prefix_to_tlv_args(prefix))
-                        n2.queue_tlv(tlv2, URGENT_JITTER)
-                return
+                        if not best or best[0] > n2.get_cost():
+                            best = [n2.get_cost(), n2]
+                # MUST be forwarded to single neighbor only
+                if best:
+                    tlv2 = SeqnoReq(seqno=tlv.seqno,
+                                    hopcount=tlv.hopcount-1,
+                                    rid=tlv.rid,
+                                    **prefix_to_tlv_args(prefix))
+                    best[1].queue_tlv(tlv2, URGENT_JITTER)
