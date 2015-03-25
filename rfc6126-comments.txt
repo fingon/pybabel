@@ -15,3 +15,11 @@ routes to start with?
 3.7.3: 'modified entry'; what if it was not modified? no gc reset? I
 assume so..
 
+3.8.1.2 .. in response to a _seqno_ request, not route request
+cannot parse 'no smaller'; not smaller?
+
+3.8.2.1 is there necessarily seqno in the source table for all nodes? much
+easier just to use seqno from the route that is being retracted.. (maybe
+there is, but shrug)
+
+SHOULD AE 1 or 3 for NH; why not 2? (ok, LL is better I guess..)
