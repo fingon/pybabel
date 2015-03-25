@@ -1,0 +1,17 @@
+'recently heard from' = ?
+
+'timer' <> 'time value' distinction is somewhat lacking in my opinion; some
+things require action at time point, and others do need just to be kept
+track of (e.g. 'hello timer''s various incarnations)
+
+route table defined in 3.2.5 does not contain router id entries, yet 3.5.4
+refers to one
+
+3.5.5 describes what is done in 3.5.4, but to little point (imho)
+
+3.6 'unfeasible route' = ?.. I assumed route table only contains feasible
+routes to start with?
+
+3.7.3: 'modified entry'; what if it was not modified? no gc reset? I
+assume so..
+
