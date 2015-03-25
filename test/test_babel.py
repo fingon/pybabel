@@ -9,8 +9,8 @@
 # Copyright (c) 2015 Markus Stenberg
 #
 # Created:       Wed Mar 25 10:46:15 2015 mstenber
-# Last modified: Wed Mar 25 14:35:48 2015 mstenber
-# Edit time:     88 min
+# Last modified: Wed Mar 25 14:50:04 2015 mstenber
+# Edit time:     92 min
 #
 """
 
@@ -145,6 +145,7 @@ class FakeSystemInterface(SystemInterface):
         fs.sid += 1
         self.sid = fs.sid
         self.ips = {}
+        self.route_changes = []
     def time(self):
         return self.fs.t
     def random(self):
@@ -177,6 +178,8 @@ class FakeSystemInterface(SystemInterface):
             d = random.random() * DELIVERY_DELAY_MAX
             self.call_later(d, s2.b.process_inbound,
                             ifname2, self.ips[ifname], b)
+    def set_route(self, *a):
+        self.route_changes.append(a)
 
 def test_babel():
     fs = FakeSystem()
@@ -219,6 +222,7 @@ def test_babel_flap():
     b2 = fs.add_babel()
     prefix = ipaddress.ip_network('2001:db8::/32')
     prefix2 = ipaddress.ip_network('fe80::/64')
+    addr = ipaddress.ip_address('fe80::101')
     b1.local_routes.add(prefix)
     b1.interface('i1')
     b2.interface('i2')
@@ -227,9 +231,17 @@ def test_babel_flap():
     fs.run_until(fs.converged)
     assert fs.routes_are_sane()
 
+    assert len(b1.sys.route_changes) == 0
+    assert len(b2.sys.route_changes) == 1
+    assert b2.sys.route_changes[-1] == (True, prefix, 'i2', addr)
+
     fs.set_connected((b1.sys, 'i1'), (b2.sys, 'i2'), False)
     fs.run_until(lambda :not fs.converged())
     assert not b2.selected_routes
+
+    assert len(b1.sys.route_changes) == 0
+    assert len(b2.sys.route_changes) == 2
+    assert b2.sys.route_changes[-1] == (False, prefix, 'i2', addr)
 
 
 def _test_babel_tree(n, brf, ifc):

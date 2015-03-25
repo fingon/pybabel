@@ -9,8 +9,8 @@
 # Copyright (c) 2015 Markus Stenberg
 #
 # Created:       Wed Mar 25 03:48:40 2015 mstenber
-# Last modified: Wed Mar 25 14:36:24 2015 mstenber
-# Edit time:     291 min
+# Last modified: Wed Mar 25 14:45:37 2015 mstenber
+# Edit time:     300 min
 #
 """
 
@@ -56,6 +56,8 @@ class SystemInterface:
     def send_unicast(self, ifname, ip, b):
         raise NotImplementedError
     def send_multicast(self, ifname, b):
+        raise NotImplementedError
+    def set_route(self, add, p, ifname, nhip):
         raise NotImplementedError
 
 class TLVQueuer:
@@ -266,7 +268,7 @@ class BabelInterface(TLVQueuer):
         return self.neighs[ip]
     def process_tlvs(self, address, tlvs):
         rid = None
-        nh = None
+        nh = address
         default_prefix = {}
         for tlv in tlvs:
             if isinstance(tlv, AckReq):
@@ -400,7 +402,16 @@ class Babel:
                            **prefix_to_tlv_args(prefix))
             # SHOULD be sent in timely manner
             self.queue_tlv(tlv, URGENT_JITTER)
+        def _sr_to_set(sr):
+            return set([(p, d['n'].i.ifname, d['n'].ip)
+                        for p, d in sr.items() if d['n']])
+        s1 = _sr_to_set(self.selected_routes)
+        s2 = _sr_to_set(sr)
         self.selected_routes = sr
+        for e in s1.difference(s2):
+            self.sys.set_route(False, *e)
+        for e in s2.difference(s1):
+            self.sys.set_route(True, *e)
     def maintain_feasibility(self, prefix, d):
         # 3.7.3 maintain feasibility distance
         if d['metric'] == INF:
