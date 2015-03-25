@@ -9,8 +9,8 @@
 # Copyright (c) 2015 Markus Stenberg
 #
 # Created:       Wed Mar 25 05:23:14 2015 mstenber
-# Last modified: Wed Mar 25 05:54:52 2015 mstenber
-# Edit time:     16 min
+# Last modified: Wed Mar 25 10:03:53 2015 mstenber
+# Edit time:     18 min
 #
 """
 
@@ -52,3 +52,13 @@ def test_tlv_endecode():
         assert o0 == o2
 
 
+def test_prefix():
+    p = ipaddress.ip_network('fe80::/64')
+    t = PadN(**prefix_to_tlv_args(p))
+    p2 = tlv_to_prefix(t)
+    assert p == p2
+
+    p = ipaddress.ip_network('1.2.3.0/24')
+    t = PadN(**prefix_to_tlv_args(p))
+    p2 = tlv_to_prefix(t)
+    assert p == p2
