@@ -9,8 +9,8 @@
 # Copyright (c) 2015 Markus Stenberg
 #
 # Created:       Wed Mar 25 05:23:14 2015 mstenber
-# Last modified: Wed Mar 25 05:46:33 2015 mstenber
-# Edit time:     11 min
+# Last modified: Wed Mar 25 05:54:52 2015 mstenber
+# Edit time:     16 min
 #
 """
 
@@ -20,15 +20,25 @@ Play with the codec
 
 from pybabel.codec import *
 
-def test_base():
+def test_packet():
     Packet.decode(Packet().encode())
-    tlvs = [Ack(nonce=123)]
+    tlvs = [Ack(nonce=123), PadN(body=b'12')]
     assert Packet.decode(Packet(tlvs=tlvs).encode()).tlvs == tlvs
 
 def test_tlv_endecode():
     for cl, a in [
+        (PadN, {'body': b'12'}),
+        (AckReq, {'nonce': 123, 'interval': 234}),
         (Ack, {'nonce': 123}),
-        (PadN, {'body': b'12'})
+        (Hello, {'seqno': 123, 'interval': 234}),
+        (IHU, {'ae': 2, 'rxcost': 345, 'interval': 456}),
+        (RID, {'rid': b'123456'}),
+        (NH, {'ae': 1}),
+        (Update, {'ae': 2, 'flags': 2, 'plen': 3, 'omitted': 4,
+                  'interval': 345, 'seqno': 456, 'metric': 567}),
+        (RouteReq, {'ae': 2, 'plen': 3}),
+        (SeqnoReq, {'ae': 2, 'plen': 3, 'seqno': 2345, 'hopcount': 3,
+                    'rid': b'123456'}),
         ]:
         o0 = cl(**a)
         b = o0.encode()
@@ -38,6 +48,7 @@ def test_tlv_endecode():
         o2 = l[0]
         for k, v in a.items():
             assert getattr(o1, k) == v
-        assert o0 == o1 and o0 == o2
+        assert o0 == o1, '%s != %s' % (o0.__dict__, o1.__dict__)
+        assert o0 == o2
 
 

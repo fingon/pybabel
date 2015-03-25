@@ -9,8 +9,8 @@
 # Copyright (c) 2015 Markus Stenberg
 #
 # Created:       Wed Mar 25 05:19:23 2015 mstenber
-# Last modified: Wed Mar 25 05:44:39 2015 mstenber
-# Edit time:     10 min
+# Last modified: Wed Mar 25 05:53:59 2015 mstenber
+# Edit time:     11 min
 #
 """
 
@@ -92,7 +92,9 @@ class BodyTLV(TLV):
         TLV.decode_buffer(self, x, ofs)
         bofs = ofs + self.size()
         blen = self.l - self.size() + 2
-        self.body = x[bofs:bofs+blen]
+        b = x[bofs:bofs+blen]
+        if b != self.body:
+            self.body = b
     def encode(self):
         self.l = self.size() - 2 + len(self.body)
         return CStruct.encode(self) + self.body
