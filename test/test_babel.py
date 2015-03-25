@@ -9,8 +9,8 @@
 # Copyright (c) 2015 Markus Stenberg
 #
 # Created:       Wed Mar 25 10:46:15 2015 mstenber
-# Last modified: Wed Mar 25 12:31:23 2015 mstenber
-# Edit time:     45 min
+# Last modified: Wed Mar 25 13:29:54 2015 mstenber
+# Edit time:     50 min
 #
 """
 
@@ -90,6 +90,7 @@ class FakeSystem:
             assert nt
             if nt > self.t:
                 self.t = nt
+                _debug('time now %s', nt)
             self.poll()
             iteration += 1
             assert iteration < max_iterations
@@ -143,7 +144,8 @@ def test_babel():
         return b
     b1 = _add_babel()
     b2 = _add_babel()
-    b1.local_routes.add(ipaddress.ip_network('2001:db8::/32'))
+    prefix = ipaddress.ip_network('2001:db8::/32')
+    b1.local_routes.add(prefix)
     b1.interface('i1')
     b2.interface('i2')
     fs.set_connected((b1.sys, 'i1'), (b2.sys, 'i2'))
@@ -164,5 +166,8 @@ def test_babel():
                 return False
         return True
     fs.run_until(_converged, b1, b2)
-    print(fs.t)
-    raise
+    assert b1.selected_routes[prefix]['n'] is None
+    n2 = b2.selected_routes[prefix]['n']
+    assert n2 is not None
+    assert n2.ip == b1.interface('i1').ip
+

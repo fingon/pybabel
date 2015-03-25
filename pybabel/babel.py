@@ -9,8 +9,8 @@
 # Copyright (c) 2015 Markus Stenberg
 #
 # Created:       Wed Mar 25 03:48:40 2015 mstenber
-# Last modified: Wed Mar 25 13:00:48 2015 mstenber
-# Edit time:     259 min
+# Last modified: Wed Mar 25 13:26:43 2015 mstenber
+# Edit time:     278 min
 #
 """
 
@@ -107,18 +107,22 @@ class BabelNeighbor(TLVQueuer):
         self.get_sys().send_unicast(self.i.ifname, self.ip,
                                     Packet(tlvs=tlvs).encode())
     def process_hello(self, tlv):
+        _debug('%s process_hello', self)
         self.last_hello = self.get_sys().time()
         self.i.b.route_selection()
     def process_ihu(self, tlv):
+        _debug('%s process_ihu %s', self, tlv)
         if tlv.ae != 0:
             # If it has address set, and it is not us, ignore
             # (~implicit based on reading of 4.4.6)
             try:
-                ip = tlv_to_ip(tlv)
+                ip = tlv_to_ip_or_ll(tlv)
             except:
+                _debug(' not parseable')
                 # 4.4.6 - invalid IHU AE => ignore
                 return
             if ip != self.i.ip:
+                _debug(' wrong target %s != %s', ip, self.i.ip)
                 return
         if self.ihu_timer:
             self.ihu_timer.cancel()
@@ -130,6 +134,7 @@ class BabelNeighbor(TLVQueuer):
     def update_transmission_cost(self, v):
         if self.transmission_cost == v:
             return
+        _debug('update_transmission_cost => %d', v)
         self.transmission_cost = v
         self.i.b.route_selection()
     def get_reception_cost(self):
@@ -138,10 +143,10 @@ class BabelNeighbor(TLVQueuer):
         # TBD: real rxcost calc
         return 1
     def get_cost(self):
+        if self.transmission_cost == INF:
+            return INF
         rxcost = self.get_reception_cost()
         if rxcost == INF:
-            return INF
-        if self.transmission_cost == INF:
             return INF
         return self.transmission_cost + rxcost
     def queue_ihu(self):
@@ -156,6 +161,7 @@ class BabelNeighbor(TLVQueuer):
         for prefix in self.routes.keys():
             self.process_update(tlv, rid, prefix, nh)
     def process_update(self, tlv, rid, prefix, nh):
+        _debug('%s process_update', self)
         sk = (prefix, rid)
         rk = prefix
         metric = tlv.metric
@@ -181,6 +187,7 @@ class BabelNeighbor(TLVQueuer):
                 else:
                     return # ignored if same rid but not feasible
             d['timer'].cancel()
+        _debug(' .. added to routes')
         dt = _b2t(tlv.interval)
         self.routes[rk] = dict(seqno=tlv.seqno,
                                metric=metric,
@@ -327,14 +334,18 @@ class Babel:
             for n in i.neighs.values():
                 nc = n.get_cost()
                 if nc == INF:
+                    _debug(' %s unreachable (%d/%d), skip', n, n.get_reception_cost(), n.transmission_cost)
                     continue
-                for p, r in n.routes.items():
+                for prefix, r in n.routes.items():
                     if r['metric'] == INF:
+                        _debug(' route to %s unreachable', p)
                         continue
                     m = nc + r['metric']
                     if prefix in sr and sr[prefix]['metric'] < m:
+                        _debug(' have better route to %s', p)
                         continue
                     sr[prefix] = dict(metric=m, n=n, r=r)
+        _debug(' remote routes: %s', sr)
         # Finally, override selected routes with local ones
         for prefix in self.local_routes:
             r = dict(rid=self.rid, seqno=self.seqno, metric=0)

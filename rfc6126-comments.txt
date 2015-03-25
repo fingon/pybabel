@@ -7,6 +7,9 @@ track of (e.g. 'hello timer''s various incarnations)
 route table defined in 3.2.5 does not contain router id entries, yet 3.5.4
 refers to one
 
+3.5.4 what is 'id' in the updates and where is it stored? and what does the
+link cost = cost mean?
+
 3.5.5 describes what is done in 3.5.4, but to little point (imho)
 
 3.6 'unfeasible route' = ?.. I assumed route table only contains feasible
