@@ -1,0 +1,7 @@
+This is minimalist proof-of-concept RFC6126 implementation of Babel.
+
+It is written in Python 3.4(+), uses normal Python socket API, and
+Linu "ip" command to interact with the rest of the system.
+
+If you ever think to use this for production use, don't!
+
