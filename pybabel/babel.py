@@ -9,8 +9,8 @@
 # Copyright (c) 2015 Markus Stenberg
 #
 # Created:       Wed Mar 25 03:48:40 2015 mstenber
-# Last modified: Wed Mar 25 10:38:18 2015 mstenber
-# Edit time:     200 min
+# Last modified: Wed Mar 25 13:00:48 2015 mstenber
+# Edit time:     259 min
 #
 """
 
@@ -19,7 +19,11 @@ actual heavy lifting (e.g. no sockets here, for unit testability).
 
 """
 
-from babel.codec import *
+from pybabel.codec import *
+
+import logging
+_logger = logging.getLogger(__name__)
+_debug = _logger.debug
 
 # Source, Route, Pending Requests are simply dicts within Babel class.
 
@@ -36,30 +40,49 @@ RECENT_HELLO_TIME = 60 # TBD - not clear in RFC!
 
 INF = 0xFFFF
 
+class SystemInterface:
+    def time(self):
+        raise NotImplementedError
+    def random(self):
+        raise NotImplementedError
+    def call_later(self, fn, cb, *a):
+        raise NotImplementedError
+    def get_rid(self):
+        raise NotImplementedError
+    def get_if_ip(self, ifname):
+        raise NotImplementedError
+    def send_unicast(self, ifname, ip, b):
+        raise NotImplementedError
+    def send_multicast(self, ifname, b):
+        raise NotImplementedError
+
 class TLVQueuer:
-    t = None
-    q = None
-    timeout = None
+    tlv_t = None
+    tlv_q = None
+    tlv_timeout = None
     def queue_tlv(self, tlv, j=HELLO_INTERVAL / 2):
-        if self.q is None: self.q = []
+        _debug('%s queue_tlv %s %s', self, tlv, j)
+        if self.tlv_q is None: self.tlv_q = []
         sys = self.get_sys()
         now = sys.time()
-        dt = random.random() * j
+        dt = sys.random() * j
         t = now + dt
-        self.q.append(tlv)
-        if self.t is None or self.t > t:
-            self.t = t
-        else:
-            return # old queued callback is fine
-        if self.timeout:
-            self.timeout.cancel()
-        self.timeout = sys.call_later(dt, self.timer_callback)
-    def timer_callback(self):
-        self.send_queue()
-        del self.q
-        del self.t
-        del self.timeout
-    def send_queue(self):
+        self.tlv_q.append(tlv)
+        if self.tlv_t and self.tlv_t <= t:
+            # old queued callback is fine
+            return
+        if self.tlv_timeout is not None:
+            self.tlv_timeout.cancel()
+        self.tlv_t = t
+        self.tlv_timeout = sys.call_later(dt, self.tlv_send_timer)
+        assert self.tlv_timeout is not None
+    def tlv_send_timer(self):
+        assert self.tlv_q
+        self.send_tlvs(self.tlv_q)
+        del self.tlv_q
+        del self.tlv_t
+        del self.tlv_timeout
+    def send_tlvs(self):
         raise NotImplementedError # child responsibility
     def get_sys(self):
         raise NotImplementedError
@@ -80,9 +103,9 @@ class BabelNeighbor(TLVQueuer):
 
     def get_sys(self):
         return self.i.get_sys()
-    def send_queue(self):
+    def send_tlvs(self, tlvs):
         self.get_sys().send_unicast(self.i.ifname, self.ip,
-                                    Packet(tlvs=self.q).encode())
+                                    Packet(tlvs=tlvs).encode())
     def process_hello(self, tlv):
         self.last_hello = self.get_sys().time()
         self.i.b.route_selection()
@@ -101,8 +124,8 @@ class BabelNeighbor(TLVQueuer):
             self.ihu_timer.cancel()
         self.update_transmission_cost(tlv.rxcost)
         dt = _b2t(tlv.interval) * IHU_HOLD_TIME_MULTIPLIER
-        self.ihu_timer = self.get_sys().call_later(dt, self.ihu_expired)
-    def ihu_expired(self):
+        self.ihu_timer = self.get_sys().call_later(dt, self.ihu_expired_timer)
+    def ihu_expired_timer(self):
         self.update_transmission_cost(INF)
     def update_transmission_cost(self, v):
         if self.transmission_cost == v:
@@ -110,7 +133,7 @@ class BabelNeighbor(TLVQueuer):
         self.transmission_cost = v
         self.i.b.route_selection()
     def get_reception_cost(self):
-        if (self.get_sys().time() - last_hello) > RECENT_HELLO_TIME:
+        if (self.get_sys().time() - self.last_hello) > RECENT_HELLO_TIME:
             return INF
         # TBD: real rxcost calc
         return 1
@@ -139,7 +162,7 @@ class BabelNeighbor(TLVQueuer):
         def is_feasible_update(): # 3.5.1
             if tlv.metric == INF:
                 return True
-            if k not in self.sources:
+            if sk not in self.i.b.sources:
                 return True
             d = self.i.b.sources[sk]
             if d['seqno'] < tlv.seqno:
@@ -173,9 +196,9 @@ class BabelNeighbor(TLVQueuer):
                 del self.routes[rk]
             d['metric'] = INF
         if rk in self.routes:
-            d['timer'] = self.sys.call_later(ROUTE_EXPIRY_TIME_MULTIPLIER * d['interval'],
-                                             self.expire_route_timer,
-                                             rk)
+            sys = self.get_sys()
+            dt = ROUTE_EXPIRY_TIME_MULTIPLIER * d['interval']
+            d['timer'] = sys.call_later(dt, self.expire_route_timer, rk)
         self.i.b.route_selection()
 
 
@@ -201,15 +224,14 @@ class BabelInterface(TLVQueuer):
         self.hello_timer()
 
         # And wildcard update request
-        self.queue_tlv(UpdateReq(ae=0, plen=0))
+        self.queue_tlv(RouteReq(ae=0, plen=0))
     def get_sys(self):
         return self.b.sys
     def hello_timer(self):
         self.queue_hello()
-        self.hello_timer = self.b.sys.call_later(HELLO_INTERVAL,
-                                                 self.hello_timer)
+        self.b.sys.call_later(HELLO_INTERVAL, self.hello_timer)
     def neighbor(self, ip):
-        if name not in self.neighs:
+        if ip not in self.neighs:
             self.neighs[ip] = BabelNeighbor(self, ip)
         return self.neighs[ip]
     def process_tlvs(self, address, tlvs):
@@ -256,23 +278,24 @@ class BabelInterface(TLVQueuer):
                     pass
     def queue_hello(self):
         self.queue_tlv(Hello(seqno=self.seqno,
-                             interval=_t2b(self.b.hello_interval)))
+                             interval=_t2b(HELLO_INTERVAL)))
         # Queue also IHUs for every neighbor
-        for ip, n in self.neighs():
+        for n in self.neighs.values():
             n.queue_ihu()
         self.seqno = (self.seqno + 1) & 0xFFFF
-    def send_queue(self):
-        self.get_sys().send_multicast(self.i.ifname,
-                                      Packet(tlvs=self.q).encode())
+    def send_tlvs(self, tlvs):
+        self.get_sys().send_multicast(self.ifname,
+                                      Packet(tlvs=tlvs).encode())
 
 
 class Babel:
     def __init__(self, sys):
+        assert isinstance(sys, SystemInterface)
         self.sys = sys
         self.ifs = {}
 
         # SHOULD be mod-EUI64; TBD
-        self.rid = ''.join(chr(random.randint(0,255)) for x in range(8))
+        self.rid = sys.get_rid()
 
         self.seqno = 0
 
@@ -284,7 +307,8 @@ class Babel:
         # [prefix] = {'rid', 'seqno', 'neigh', 'times', 'timer'}
 
         self.selected_routes = {}
-        # [prefix] = {'metric', 'n', 'r'}
+        # [prefix] = {'metric', 'n', 'r' => route struct within n.routes (but may be historic copy too!}
+        self.local_routes = set()
 
         self.update_timer()
     def interface(self, name, ip=None):
@@ -294,8 +318,9 @@ class Babel:
             self.ifs[name] = BabelInterface(self, name, ip)
         return self.ifs[name]
     def process_inbound(self, ifname, address, p):
-        self.interface(ifname).process_tlvs(address, Packet.decode(p))
+        self.interface(ifname).process_tlvs(address, Packet.decode(p).tlvs)
     def route_selection(self):
+        _debug('%s Babel.route_selection' % self)
         # 3.6
         sr = {}
         for i in self.ifs.values():
@@ -310,7 +335,11 @@ class Babel:
                     if prefix in sr and sr[prefix]['metric'] < m:
                         continue
                     sr[prefix] = dict(metric=m, n=n, r=r)
-        # 3.7.2
+        # Finally, override selected routes with local ones
+        for prefix in self.local_routes:
+            r = dict(rid=self.rid, seqno=self.seqno, metric=0)
+            sr[prefix] = dict(metric=0, n=None, r=r)
+        # 3.7.2 (triggered updates)
         for prefix, d in sr.items():
             if not prefix in self.selected_routes:
                 continue
@@ -318,36 +347,41 @@ class Babel:
             # MUST send update in timely manner if rid changes
             if d2['r']['rid'] != d['r']['rid']:
                 self.queue_update(prefix, d, URGENT_JITTER)
+        for prefix, d2 in self.selected_routes.items():
+            if prefix in sr:
+                continue
             # SHOULD send if route redacted
-            if d2['r']['metric'] < INF and d['r']['metric'] == INF:
-                self.queue_update(prefix, d, URGENT_JITTER)
-                # 3.8.2.1 MUST send seqno request (no feasible routes)
-                tlv = SeqnoReq(seqno=d['r']['seqno'] + 1,
-                               hopcount=HOP_COUNT,
-                               rid=d['r']['rid'],
-                               **prefix_to_tlv_args(prefix))
-                self.queue_tlv(tlv)
-    def maintain_feasibility(self, d):
+            self.queue_update(prefix, d, URGENT_JITTER)
+            # 3.8.2.1 MUST send seqno request (no feasible routes)
+            tlv = SeqnoReq(seqno=d['r']['seqno'] + 1,
+                           hopcount=HOP_COUNT,
+                           rid=d['r']['rid'],
+                           **prefix_to_tlv_args(prefix))
+            self.queue_tlv(tlv)
+        self.selected_routes = sr
+    def maintain_feasibility(self, prefix, d):
         # 3.7.3 maintain feasibility distance
         if d['metric'] == INF:
             return
-        sk = (prefix, d['rid'])
+        r = d['r']
+        sk = (prefix, r['rid'])
         if sk not in self.sources:
-            sd = {'seqno': d['seqno'],
+            sd = {'seqno': r['seqno'],
                   'metric': d['metric']}
             self.sources[sk] = sd
         else:
             sd = self.sources[sk]
-            if d['seqno'] > sd['seqno']:
-                sd.update(dict(seqno=d['seqno'],
+            if r['seqno'] > sd['seqno']:
+                sd.update(dict(seqno=r['seqno'],
                                metric=d['metric']))
                 sd['timer'].cancel()
-            elif d['seqno'] == sd['seqno'] and d['metric'] < sd['metric']:
+            elif r['seqno'] == sd['seqno'] and d['metric'] < sd['metric']:
                 sd['metric'] = d['metric']
                 sd['timer'].cancel()
             else:
                 return
-        sd['timer'] = self.sys.call_later(SOURCE_GC_TIME, self.source_gc_timer, sk)
+        sd['timer'] = self.sys.call_later(SOURCE_GC_TIME,
+                                          self.source_gc_timer, sk)
     def source_gc_timer(self, sk):
         del self.sources[sk]
     def update_timer(self):
@@ -359,30 +393,33 @@ class Babel:
         for i in self.ifs.values():
             i.queue_tlv(tlv, *a)
     def queue_update(self, prefix, d, *a):
-        self.maintain_feasibility(d)
-        u = self.to_update_tlv(prefix, d)
-        self.queue_tlv(u, *a)
+        self.maintain_feasibility(prefix, d)
+        self.queue_update_tlv(prefix, d, *a)
+    def queue_update_tlv(self, prefix, d, *a):
+        self.queue_tlv(RID(rid=d['r']['rid']))
+        self.queue_tlv(self.to_update_tlv(prefix, d), *a)
+
     def to_update_tlv(self, prefix, d):
         flags = 0
         omitted = 0
         interval = UPDATE_INTERVAL
-        u = Update(flags=flags, omitted=omitted, interval=_t2b(interval), seqno=d['seqno'], metric=d['metric'])
-        prefix_to_tlv_args(prefix, u)
+        r = d['r']
+        u = Update(flags=flags, omitted=omitted, interval=_t2b(interval),
+                   seqno=r['seqno'], metric=d['metric'],
+                   **prefix_to_tlv_args(prefix))
         return u
     def process_route_req_i(self, i, tlv):
         # 3.8.1.1
         if tlv.ae == 0:
             # SHOULD send full routing table dump
             for prefix, d in self.selected_routes.items():
-                u = self.to_update_tlv(prefix, d)
-                i.queue_tlv(u)
+                self.queue_update_tlv(prefix, d)
             return
         # MUST send an update to individual req.
         prefix = tlv_to_prefix(tlv)
         d = self.selected_routes.get(prefix)
-        d = d or {'metric': INF, 'seqno': 0}
-        u = self.to_update_tlv(prefix, d)
-        i.queue_tlv(u)
+        d = d or {'metric': INF, 'r': {'seqno': 0}}
+        self.queue_update_tlv(prefix, d)
     def process_seqno_req_n(self, n, tlv):
         i = n.i
         # 3.8.1.2
@@ -390,18 +427,17 @@ class Babel:
         d = self.selected_routes.get(prefix)
         if d is None: return # not present, ignored
         if d['metric'] == INF: return # infinite metric
-        if tlv.rid != d['rid'] or tlv.seqno <= d['seqno']:
+        r = d['r']
+        if tlv.rid != d['rid'] or tlv.seqno <= r['seqno']:
             # MUST send update if prefix varies or
             # ' no smaller'
-            u = self.to_update_tlv(prefix, d)
-            i.queue_tlv(u)
+            self.queue_update_tlv(prefix, d)
             return
-        if tlv.rid == d['rid'] and tlv.seqno > d['seqno']:
+        if tlv.rid == d['rid'] and tlv.seqno > r['seqno']:
             if tlv.rid == self.rid:
                 self.seqno += 1
-                d['seqno'] += 1
-                u = self.to_update_tlv(prefix, d)
-                i.queue_tlv(u)
+                r['seqno'] += self.seqno
+                self.queue_update_tlv(prefix, d)
                 return
             if tlv.hopcount >= 2:
                 for i2 in self.ifs.values():
