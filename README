@@ -5,3 +5,6 @@ Linu "ip" command to interact with the rest of the system.
 
 If you ever think to use this for production use, don't!
 
+Intentional limitations:
+- IPv6 only (legacy IP? what's that?)
+
