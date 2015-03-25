@@ -9,8 +9,8 @@
 # Copyright (c) 2015 Markus Stenberg
 #
 # Created:       Wed Mar 25 03:48:40 2015 mstenber
-# Last modified: Wed Mar 25 14:45:37 2015 mstenber
-# Edit time:     300 min
+# Last modified: Thu Mar 26 00:15:25 2015 mstenber
+# Edit time:     302 min
 #
 """
 
@@ -351,12 +351,14 @@ class Babel:
     def process_inbound(self, ifname, address, b):
         # 4: non-link-local MUST be ignored
         if not address.is_link_local:
+            _debug('process_inbound - non-link-local %s', address)
             return
         try:
             p = Packet.decode(b)
         except:
             _debug('process_inbound - decode failure')
             return
+        _debug('process_inbound %s - %s', address, p.tlvs)
         self.interface(ifname).process_tlvs(address, p.tlvs)
     def route_selection(self):
         _debug('%s Babel.route_selection' % self)
