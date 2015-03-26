@@ -9,8 +9,8 @@
 # Copyright (c) 2015 Markus Stenberg
 #
 # Created:       Wed Mar 25 10:46:15 2015 mstenber
-# Last modified: Thu Mar 26 08:42:18 2015 mstenber
-# Edit time:     92 min
+# Last modified: Thu Mar 26 16:21:35 2015 mstenber
+# Edit time:     103 min
 #
 """
 
@@ -129,8 +129,8 @@ class FakeSystem:
                 return False
         # Have to have same set of selected routes
         for i in range(1, len(bl)):
-            k1 = bl[0].selected_routes.keys()
-            k2 = bl[i].selected_routes.keys()
+            k1 = bl[0].get_valid_selected_routes().keys()
+            k2 = bl[i].get_valid_selected_routes().keys()
             if k1 != k2:
                 _debug('_converged .. not: route key delta %s<>%s' % (k1, k2))
                 return False
@@ -178,8 +178,9 @@ class FakeSystemInterface(SystemInterface):
             d = random.random() * DELIVERY_DELAY_MAX
             self.call_later(d, s2.b.process_inbound,
                             ifname2, self.ips[ifname], b)
-    def set_route(self, *a):
-        self.route_changes.append(a)
+    def set_route(self, **kw):
+        _debug('%s set_route %s', self, kw)
+        self.route_changes.append(kw)
 
 def test_babel():
     fs = FakeSystem()
@@ -232,17 +233,23 @@ def test_babel_flap():
     assert fs.routes_are_sane()
 
     assert len(b1.sys.route_changes) == 0
-    assert len(b2.sys.route_changes) == 1
-    assert b2.sys.route_changes[-1] == (True, prefix, 'i2', addr)
+    assert len(b2.sys.route_changes) <= 2
+    #assert b2.sys.route_changes[-1] == dict(op=OP_DEL, blackhole=True, prefix=prefix)
+    #assert b2.sys.route_changes[-2] == dict(op=OP_ADD, prefix=prefix, ifname='i2', nh=addr)
+    # depending on ordering (timing) we may or may not have initial blackhole. grr.
+    b2.sys.route_changes = []
 
     fs.set_connected((b1.sys, 'i1'), (b2.sys, 'i2'), False)
     fs.run_until(lambda :not fs.converged())
-    assert not b2.selected_routes
 
     assert len(b1.sys.route_changes) == 0
     assert len(b2.sys.route_changes) == 2
-    assert b2.sys.route_changes[-1] == (False, prefix, 'i2', addr)
+    assert b2.sys.route_changes == [dict(op=OP_DEL, prefix=prefix, ifname='i2', nh=addr),
+                                    dict(op=OP_ADD, blackhole=True, prefix=prefix)]
+    b2.sys.route_changes = []
 
+    fs.run_until(lambda :len(b2.sys.route_changes), max_iterations=1000)
+    assert b2.sys.route_changes == [dict(op=OP_DEL, blackhole=True, prefix=prefix)]
 
 def _test_babel_tree(n, brf, ifc):
     fs = FakeSystem()

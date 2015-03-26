@@ -9,8 +9,8 @@
 # Copyright (c) 2015 Markus Stenberg
 #
 # Created:       Wed Mar 25 21:53:19 2015 mstenber
-# Last modified: Thu Mar 26 23:05:33 2015 mstenber
-# Edit time:     166 min
+# Last modified: Thu Mar 26 16:25:42 2015 mstenber
+# Edit time:     174 min
 #
 """
 
@@ -18,7 +18,7 @@ Leveraging the pybabel module, minimalist routing daemon.
 
 """
 
-from pybabel.babel import SystemInterface, Babel
+from pybabel.babel import SystemInterface, Babel, OP_ADD, OP_DEL
 
 import time
 import random
@@ -118,10 +118,12 @@ class LinuxSystemInterface(SystemInterface):
         a = ip
         ifindex = socket.if_nametoindex(ifname)
         babel.interface(ifname).s.sendto(b, (a, BABEL_PORT, 0, ifindex))
-    def set_route(self, add, prefix, ifname, nhip):
-        op = add and 'replace' or 'del'
+    def set_route(self, op, prefix, blackhole=False, ifname=None, nh=None):
         af = isinstance(prefix, ipaddress.IPv4Network) and "-4" or "-6"
-        cmd = 'ip %(af)s route %(op)s %(prefix)s via %(nhip)s dev %(ifname)s proto 42' % locals()
+        if blackhole:
+            cmd = 'ip %(af)s route %(op)s blackhole %(prefix)s proto 42' % locals()
+        else:
+            cmd = 'ip %(af)s route %(op)s %(prefix)s via %(nh)s dev %(ifname)s proto 42' % locals()
         self.system(cmd)
     def system(self, cmd):
         print('# %s' % cmd)

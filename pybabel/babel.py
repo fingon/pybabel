@@ -9,8 +9,8 @@
 # Copyright (c) 2015 Markus Stenberg
 #
 # Created:       Wed Mar 25 03:48:40 2015 mstenber
-# Last modified: Thu Mar 26 12:26:24 2015 mstenber
-# Edit time:     377 min
+# Last modified: Thu Mar 26 16:25:04 2015 mstenber
+# Edit time:     412 min
 #
 """
 
@@ -48,6 +48,9 @@ MY_METRIC = 256 # what it costs to visit us; no real metric calc here!
 MTU_ISH = 1400 # random MTU we use for splitting TLVs when we send stuff
 
 INF = 0xFFFF
+
+OP_ADD='replace'
+OP_DEL='del'
 
 class SystemInterface:
     def time(self):
@@ -254,6 +257,7 @@ class BabelNeighbor(TLVQueuer):
                                rid=rid)
         self.expire_route_timer(rk, initial=True)
     def expire_route_timer(self, rk, initial=False):
+        if not initial: _debug('%s expire_route_timer %s', self, rk)
         assert rk in self.routes
         d = self.routes[rk]
         if not initial:
@@ -401,22 +405,18 @@ class Babel:
         for i in self.ifs.values():
             for n in i.neighs.values():
                 nc = n.get_cost()
-                if nc == INF:
-                    _debug(' %s unreachable (%d/%d), skip', n, n.get_reception_cost(), n.transmission_cost)
-                    continue
                 for prefix, r in n.routes.items():
-                    if r['metric'] == INF:
-                        _debug(' route to %s unreachable via %s', prefix, n)
-                        continue
                     # TBD - _I_ do not really want to select IPv4 routes
                     # _at all_ but for 'complete' experience someone might
-                    if isinstance(r['nh'], ipaddress.IPv4Address):
+                    if isinstance(prefix.network_address,
+                                  ipaddress.IPv4Address):
                         continue
-                    m = nc + r['metric']
+                    if nc == INF or r['metric'] == INF:
+                        m = INF
+                    else:
+                        m = min(INF-1, nc + r['metric'])
                     if prefix in sr and sr[prefix]['metric'] < m:
-                        _debug(' have better route to %s than %s', prefix, n)
                         continue
-                    _debug(' using %s via %s', prefix, n)
                     sr[prefix] = dict(metric=m, n=n, r=r)
         _debug(' remote routes: %s', sr)
         # Finally, override selected routes with local ones
@@ -433,7 +433,8 @@ class Babel:
             if d2['r']['rid'] != d['r']['rid']:
                 self.queue_update(prefix, d, URGENT_JITTER)
         for prefix, d in self.selected_routes.items():
-            if prefix in sr:
+            if d['metric'] == INF: continue # was <INF, now should be INF
+            if prefix in sr and sr[prefix]['metric'] < INF:
                 continue
             # SHOULD send if route redacted
             self.queue_update(prefix, d, URGENT_JITTER)
@@ -444,16 +445,37 @@ class Babel:
                            **prefix_to_tlv_args(prefix))
             # SHOULD be sent in timely manner
             self.queue_tlv(tlv, URGENT_JITTER)
-        def _sr_to_set(sr):
-            return set([(p, d['n'].i.ifname, d.get('r', {}).get('nh', d['n'].ip))
-                        for p, d in sr.items() if d['n']])
-        s1 = _sr_to_set(self.selected_routes)
-        s2 = _sr_to_set(sr)
+        def _to_route(d):
+            ifname = d['n'].i.ifname
+            nh = d.get('r', {}).get('nh', d['n'].ip)
+            return dict(ifname=ifname, nh=nh)
+        sr0 = self.selected_routes
+        s1 = set([k for k in sr0.keys() if sr0[k]['n']])
+        s2 = set([k for k in sr.keys() if sr[k]['n']])
+        # New routes
+        for p in s2.difference(s1):
+            if sr[p]['metric'] == INF: continue
+            self.sys.set_route(op=OP_ADD, prefix=p, **_to_route(sr[p]))
+        # Updated routes
+        for p in s1.intersection(s2):
+            # If state is unchanged, ignore
+            if (sr0[p]['metric'] == INF) == (sr[p]['metric'] == INF):
+                continue
+            if sr[p]['metric'] == INF:
+                # Fresh blackhole
+                self.sys.set_route(op=OP_DEL, prefix=p, **_to_route(sr[p]))
+                self.sys.set_route(blackhole=True, op=OP_ADD, prefix=p)
+            else:
+                # No longer blackhole
+                self.sys.set_route(blackhole=True, op=OP_DEL, prefix=p)
+                self.sys.set_route(op=OP_ADD, prefix=p, **_to_route(sr[p]))
+        # Old, hold time expired routes
+        for p in s1.difference(s2):
+            self.sys.set_route(blackhole=True, op=OP_DEL, prefix=p)
         self.selected_routes = sr
-        for e in s1.difference(s2):
-            self.sys.set_route(False, *e)
-        for e in s2.difference(s1):
-            self.sys.set_route(True, *e)
+    def get_valid_selected_routes(self):
+        return dict([(k, v) for (k, v) in self.selected_routes.items()
+                     if self.selected_routes[k]['metric'] < INF])
     def maintain_feasibility(self, prefix, d):
         # 3.7.3 maintain feasibility distance
         if d['metric'] == INF:
@@ -532,12 +554,12 @@ class Babel:
         if d is None: return # not present, ignored
         if d['metric'] == INF: return # infinite metric
         r = d['r']
-        if tlv.rid != d['rid'] or tlv.seqno <= r['seqno']:
+        if tlv.rid != r['rid'] or tlv.seqno <= r['seqno']:
             # MUST send update if prefix varies or
             # ' no smaller'
             self.queue_update_tlv(prefix, d)
             return
-        if tlv.rid == d['rid'] and tlv.seqno > r['seqno']:
+        if tlv.rid == r['rid'] and tlv.seqno > r['seqno']:
             if tlv.rid == self.rid:
                 self.seqno += 1
                 r['seqno'] += self.seqno
