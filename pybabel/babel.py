@@ -9,8 +9,8 @@
 # Copyright (c) 2015 Markus Stenberg
 #
 # Created:       Wed Mar 25 03:48:40 2015 mstenber
-# Last modified: Thu Mar 26 16:31:08 2015 mstenber
-# Edit time:     414 min
+# Last modified: Thu Mar 26 16:58:00 2015 mstenber
+# Edit time:     435 min
 #
 """
 
@@ -113,6 +113,7 @@ def sort_and_eliminate_tlvs_with_same_rid(tlvs):
             by_rid[rid].append(tlv)
             rid = None
         else:
+            assert not isinstance(tlv, Update) # Updates must have RID
             yield tlv
     for rid, l in by_rid.items():
         yield RID(rid=rid)
@@ -218,10 +219,12 @@ class BabelNeighbor(TLVQueuer):
                   rxcost=rxcost, **ll_to_tlv_args(self.ip))
         self.i.queue_tlv(ihu)
     def process_update_all(self, tlv, rid, nh):
+        rid = rid or self.rid # should not really matter; we share code tho so..
         assert tlv.metric == INF
         for prefix in self.routes.keys():
             self.process_update(tlv, rid, prefix, nh)
     def process_update(self, tlv, rid, prefix, nh):
+        assert len(rid) == RID_LEN
         _debug('%s process_update', self)
         sk = (prefix, rid)
         rk = prefix
@@ -318,7 +321,19 @@ class BabelInterface(TLVQueuer):
             elif isinstance(tlv, Update):
                 af = tlv.ae == 3 and 2 or tlv.ae
                 if tlv.flags & 0x40:
-                    rid = tlv.body[-8:]
+                    if af:
+                        rid = tlv.body[-8:]
+                        if len(rid) != RID_LEN:
+                            _error('broken implicit rid:%s' % tlv)
+                            return
+                    else:
+                        # TBD - reference implementation sends
+                        # AE=0, metric=INF - how do you take last 8
+                        # bytes for rid out of that?
+
+                        # _assume_ it is just wanting to use end of address
+                        rid = address.packed[-RID_LEN:]
+                        assert len(rid) == RID_LEN
                 if af:
                     tlvfull = tlv.omitted and PrefixTLVTuple(ae=tlv.ae, plen=tlv.plen, body=default_prefix.get(af, b'')[:tlv.omitted] + tlv.body) or tlv
                     # MUST ignore invalid AE
@@ -339,6 +354,9 @@ class BabelInterface(TLVQueuer):
                 self.b.process_seqno_req_n(self.neighbor(address), tlv)
             elif isinstance(tlv, RID):
                 rid = tlv.rid
+                if len(rid) != RID_LEN:
+                    _error('broken rid tlv: %s', tlv)
+                    return
             elif isinstance(tlv, NH):
                 af = tlv.ae == 3 and 2 or tlv.ae
                 # Unknown ones MUST be silently ignored
@@ -516,7 +534,9 @@ class Babel:
         self.maintain_feasibility(prefix, d)
         self.queue_update_tlv(prefix, d, *a)
     def queue_update_tlv(self, prefix, d, *a):
-        self.queue_tlv(RID(rid=d['r']['rid']))
+        rid = d['r']['rid']
+        assert len(rid) == RID_LEN, 'broken d:%s for %s' % (d, prefix)
+        self.queue_tlv(RID(rid=rid))
         flags = 0
         omitted = 0
         interval = UPDATE_INTERVAL

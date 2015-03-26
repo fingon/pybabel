@@ -1,0 +1,5 @@
+update AE=0 metric=INF semantics are bit funny;
+
+reference implementation sets bit 40, which (by my reading) means take 8
+bytes from the prefix; however, there are not any bits in the prefix!
+
