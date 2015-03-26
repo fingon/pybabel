@@ -9,8 +9,8 @@
 # Copyright (c) 2015 Markus Stenberg
 #
 # Created:       Wed Mar 25 05:23:14 2015 mstenber
-# Last modified: Thu Mar 26 05:38:57 2015 mstenber
-# Edit time:     23 min
+# Last modified: Thu Mar 26 08:44:10 2015 mstenber
+# Edit time:     31 min
 #
 """
 
@@ -19,6 +19,8 @@ Play with the codec
 """
 
 from pybabel.codec import *
+
+import binascii
 
 def test_packet():
     Packet.decode(Packet().encode())
@@ -29,6 +31,7 @@ def test_repr():
     t = PadN(body=b'12')
     assert repr(t) == "PadN(body=b'12')"
 
+
 def test_tlv_endecode():
     for cl, a in [
         (PadN, {'body': b'12'}),
@@ -36,13 +39,13 @@ def test_tlv_endecode():
         (Ack, {'nonce': 123}),
         (Hello, {'seqno': 123, 'interval': 234}),
         (IHU, {'ae': 2, 'rxcost': 345, 'interval': 456}),
-        (RID, {'rid': b'123456'}),
+        (RID, {'rid': b'12345678'}),
         (NH, {'ae': 1}),
         (Update, {'ae': 2, 'flags': 2, 'plen': 3, 'omitted': 4,
                   'interval': 345, 'seqno': 456, 'metric': 567}),
         (RouteReq, {'ae': 2, 'plen': 3}),
         (SeqnoReq, {'ae': 2, 'plen': 3, 'seqno': 2345, 'hopcount': 3,
-                    'rid': b'123456'}),
+                    'rid': b'12345678'}),
         ]:
         o0 = cl(**a)
         b = o0.encode()
@@ -51,9 +54,18 @@ def test_tlv_endecode():
         assert len(l) == 1
         o2 = l[0]
         for k, v in a.items():
-            assert getattr(o1, k) == v
+            v2 = getattr(o1, k)
+            assert v2 == v, '%s - %s != %s' % (k, v, v2)
         assert o0 == o1, '%s != %s' % (o0.__dict__, o1.__dict__)
         assert o0 == o2
+
+    # seqno from real Babel
+    # fdf6.. = prefix
+
+    #                       T L AEP SEQ H R RID______
+    b = binascii.unhexlify('0a140230cfec7f00648e8a067cb3db0afdf6e0b2026a')
+    l = list(decode_tlvs(b))
+    assert len(l) == 1
 
 
 def test_prefix():
@@ -66,6 +78,7 @@ def test_prefix():
     t = PadN(**prefix_to_tlv_args(p))
     p2 = tlv_to_prefix(t)
     assert p == p2
+
 
 def test_ip_ll():
     for a in [ipaddress.ip_address('fe80::1'),

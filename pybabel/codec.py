@@ -9,8 +9,8 @@
 # Copyright (c) 2015 Markus Stenberg
 #
 # Created:       Wed Mar 25 05:19:23 2015 mstenber
-# Last modified: Thu Mar 26 05:22:10 2015 mstenber
-# Edit time:     41 min
+# Last modified: Thu Mar 26 08:41:14 2015 mstenber
+# Edit time:     43 min
 #
 """
 
@@ -21,6 +21,8 @@ for handling TLVs.
 
 import struct
 import ipaddress
+
+RID_LEN = 8
 
 class EqMixin:
     def __eq__(self, o):
@@ -133,7 +135,7 @@ class IHU(BodyTLV):
 
 class RID(TLV):
     t = 6
-    format = TLV.format + 'H6s'
+    format = TLV.format + 'H%ss' % RID_LEN
     keys = TLV.keys[:] + ['reserved', 'rid']
     reserved = 0
 
@@ -155,7 +157,7 @@ class RouteReq(BodyTLV):
 
 class SeqnoReq(BodyTLV):
     t = 10
-    format = TLV.format + 'BBHBB6s'
+    format = TLV.format + 'BBHBB%ss' % RID_LEN
     keys = TLV.keys[:] + ['ae', 'plen', 'seqno', 'hopcount', 'reserved', 'rid']
     reserved = 0
 

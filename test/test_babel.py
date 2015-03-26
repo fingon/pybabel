@@ -9,7 +9,7 @@
 # Copyright (c) 2015 Markus Stenberg
 #
 # Created:       Wed Mar 25 10:46:15 2015 mstenber
-# Last modified: Wed Mar 25 14:50:04 2015 mstenber
+# Last modified: Thu Mar 26 08:42:18 2015 mstenber
 # Edit time:     92 min
 #
 """
@@ -155,7 +155,7 @@ class FakeSystemInterface(SystemInterface):
         self.fs.timeouts.append(o)
         return o
     def get_rid(self):
-        return bytes([0] * 7 + [self.sid])
+        return bytes([0] * (RID_LEN-1) + [self.sid])
     def get_if_ip(self, ifname):
         self.iid += 1
         a = ipaddress.ip_address('fe80::')
