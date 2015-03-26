@@ -9,8 +9,8 @@
 # Copyright (c) 2015 Markus Stenberg
 #
 # Created:       Wed Mar 25 03:48:40 2015 mstenber
-# Last modified: Thu Mar 26 04:52:49 2015 mstenber
-# Edit time:     334 min
+# Last modified: Thu Mar 26 05:23:08 2015 mstenber
+# Edit time:     348 min
 #
 """
 
@@ -21,9 +21,12 @@ actual heavy lifting (e.g. no sockets here, for unit testability).
 
 from pybabel.codec import *
 
+import collections
+
 import logging
 _logger = logging.getLogger(__name__)
 _debug = _logger.debug
+_error = _logger.error
 
 # Source, Route, Pending Requests are simply dicts within Babel class.
 
@@ -239,6 +242,8 @@ def _b2t(v):
 def _t2b(v):
     return int(v * 100)
 
+PrefixTLVTuple = collections.namedtuple('PrefixTLVTuple', 'ae body plen')
+
 class BabelInterface(TLVQueuer):
     def __init__(self, b, ifname, ip):
         self.b = b
@@ -276,18 +281,20 @@ class BabelInterface(TLVQueuer):
             elif isinstance(tlv, IHU):
                 self.neighbor(address).process_ihu(tlv)
             elif isinstance(tlv, Update):
-                if tlv.flags & 0x80:
-                    default_prefix[tlv.ae] = tlv.body
+                af = tlv.ae == 3 and 2 or tlv.ae
                 if tlv.flags & 0x40:
                     rid = tlv.body[-8:]
-                if tlv.ae:
-                    tlvfull = tlv.omitted and {'ae': tlv.ae, 'body': default_prefix.get(tlv.ae, b'')[:tlv.omitted] + tlv.body} or tlv
+                if af:
+                    tlvfull = tlv.omitted and PrefixTLVTuple(ae=tlv.ae, plen=tlv.plen, body=default_prefix.get(af, b'')[:tlv.omitted] + tlv.body) or tlv
                     # MUST ignore invalid AE
                     try:
                         prefix = tlv_to_prefix(tlvfull)
-                    except:
+                    except ValueError:
+                        _error('invalid prefix in update request %s (%s)', tlvfull, tlv)
                         continue
-                    nh = default_nh.get(tlv.ae, address)
+                    if tlv.flags & 0x80:
+                        default_prefix[af] = prefix.network_address.packed
+                    nh = default_nh.get(af, address)
                     self.neighbor(address).process_update(tlv, rid, prefix, nh)
                 else:
                     self.neighbor(address).process_update_all(tlv, rid, address)
@@ -298,9 +305,10 @@ class BabelInterface(TLVQueuer):
             elif isinstance(tlv, RID):
                 rid = tlv.rid
             elif isinstance(tlv, NH):
+                af = tlv.ae == 3 and 2 or tlv.ae
                 # Unknown ones MUST be silently ignored
                 try:
-                    default_nh[tlv.ae] = tlv_to_ip_or_ll(tlv)
+                    default_nh[af] = tlv_to_ip_or_ll(tlv)
                 except:
                     pass
     def queue_hello(self):
@@ -475,14 +483,22 @@ class Babel:
                 self.queue_update_tlv(prefix, d)
             return
         # MUST send an update to individual req.
-        prefix = tlv_to_prefix(tlv)
+        try:
+            prefix = tlv_to_prefix(tlv)
+        except ValueError:
+            _error('invalid prefix in process_route_req_i: %s', tlv)
+            return
         d = self.selected_routes.get(prefix)
         d = d or {'metric': INF}
         self.queue_update_tlv(prefix, d)
     def process_seqno_req_n(self, n, tlv):
         i = n.i
         # 3.8.1.2
-        prefix = tlv_to_prefix(tlv)
+        try:
+            prefix = tlv_to_prefix(tlv)
+        except ValueError:
+            _error('invalid prefix in process_seqno_req_n: %s', tlv)
+            return
         d = self.selected_routes.get(prefix)
         if d is None: return # not present, ignored
         if d['metric'] == INF: return # infinite metric
