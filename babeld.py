@@ -9,8 +9,8 @@
 # Copyright (c) 2015 Markus Stenberg
 #
 # Created:       Wed Mar 25 21:53:19 2015 mstenber
-# Last modified: Thu Mar 26 05:28:20 2015 mstenber
-# Edit time:     141 min
+# Last modified: Thu Mar 26 04:54:15 2015 mstenber
+# Edit time:     143 min
 #
 """
 
@@ -32,12 +32,10 @@ import logging
 _logger = logging.getLogger(__name__)
 _debug = _logger.debug
 
-
 BABEL_GROUP = 'ff02::1:6'
 BABEL_PORT = 6696
 
 protocol = None
-
 
 class Timeout:
     done = False
@@ -122,46 +120,38 @@ class LinuxSystemInterface(SystemInterface):
         print('# %s' % cmd)
         os.system(cmd)
 
-import argparse
-ap = argparse.ArgumentParser()
-ap.add_argument('ifname',
-                nargs='*',
-                help="Interfaces to listen on.")
-ap.add_argument('-d', '--debug', action='store_true')
-args = ap.parse_args()
-
-sys = LinuxSystemInterface()
-babel = Babel(sys)
-if args.debug:
-    import logging
-    logging.basicConfig(level=logging.DEBUG)
-
-
-
-def setup():
+def setup(iflist):
     addrinfo = socket.getaddrinfo(BABEL_GROUP, None)[0]
     group_bin = socket.inet_pton(addrinfo[0], addrinfo[4][0])
     s = socket.socket(family=socket.AF_INET6, type=socket.SOCK_DGRAM)
     s.bind(('', BABEL_PORT))
     mreq = group_bin + struct.pack('@I', 0)
     s.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_JOIN_GROUP, mreq)
-    #s.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_RECVPKTINFO, True)
+    s.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_MULTICAST_LOOP, False)
     def _f():
-        data, anc, flags, addr = s.recvmsg(2**16, 0)
-        # TBD: do we _need_ pktinfo actually?
-        #ifname = None
-        #for level, type, data in anc:
-        #    if type == socket.IPV6_PKTINFO:
-        #        (ifindex,) = struct.unpack('@I', data[16:])
-        #        ifname = socket.if_indextoname(ifindex)
-        # however.. we can get ifname just from addr?
+        data, addr = s.recvfrom(2**16)
         ads, ifname = addr[0].split('%')
         a = ipaddress.ip_address(ads)
         babel.process_inbound(ifname, a, data)
     sys.add_reader(s, _f)
-    for ifname in args.ifname:
+    for ifname in iflist:
         ifo = babel.interface(ifname)
         ifo.s = s
 
-setup()
-sys.loop()
+if __name__ == '__main__':
+    import argparse
+    ap = argparse.ArgumentParser()
+    ap.add_argument('ifname',
+                    nargs='*',
+                    help="Interfaces to listen on.")
+    ap.add_argument('-d', '--debug', action='store_true')
+    args = ap.parse_args()
+
+    sys = LinuxSystemInterface()
+    babel = Babel(sys)
+    if args.debug:
+        import logging
+        logging.basicConfig(level=logging.DEBUG)
+
+    setup(args.ifname)
+    sys.loop()
