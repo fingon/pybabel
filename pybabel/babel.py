@@ -9,8 +9,8 @@
 # Copyright (c) 2015 Markus Stenberg
 #
 # Created:       Wed Mar 25 03:48:40 2015 mstenber
-# Last modified: Thu Mar 26 05:25:42 2015 mstenber
-# Edit time:     309 min
+# Last modified: Thu Mar 26 04:52:49 2015 mstenber
+# Edit time:     334 min
 #
 """
 
@@ -123,7 +123,6 @@ class BabelNeighbor(TLVQueuer):
 
         #self.history = []
         #self.expected_seqno = 0
-
     def get_sys(self):
         return self.i.get_sys()
     def send_tlvs(self, tlvs):
@@ -250,8 +249,6 @@ class BabelInterface(TLVQueuer):
         # per-if hello seqno
         self.seqno = 0
 
-        # TBD update timer
-
         # Queue hello immediately
         self.hello_timer()
 
@@ -283,14 +280,11 @@ class BabelInterface(TLVQueuer):
                     default_prefix[tlv.ae] = tlv.body
                 if tlv.flags & 0x40:
                     rid = tlv.body[-8:]
-                if tlv.omitted:
-                    d = {'ae': tlv.ae, 'body': default_prefix.get(tlv.ae, b'')[:tlv.omitted] + tlv.body}
-                else:
-                    d = tlv
                 if tlv.ae:
+                    tlvfull = tlv.omitted and {'ae': tlv.ae, 'body': default_prefix.get(tlv.ae, b'')[:tlv.omitted] + tlv.body} or tlv
                     # MUST ignore invalid AE
                     try:
-                        prefix = tlv_to_prefix(d)
+                        prefix = tlv_to_prefix(tlvfull)
                     except:
                         continue
                     nh = default_nh.get(tlv.ae, address)
@@ -326,7 +320,7 @@ class Babel:
         self.sys = sys
         self.ifs = {}
 
-        # SHOULD be mod-EUI64; TBD
+        # SHOULD be mod-EUI64; hopefully system provides that
         self.rid = sys.get_rid()
 
         self.seqno = 0
@@ -373,12 +367,17 @@ class Babel:
                     continue
                 for prefix, r in n.routes.items():
                     if r['metric'] == INF:
-                        _debug(' route to %s unreachable', p)
+                        _debug(' route to %s unreachable via %s', prefix, n)
+                        continue
+                    # TBD - _I_ do not really want to select IPv4 routes
+                    # _at all_ but for 'complete' experience someone might
+                    if isinstance(r['nh'], ipaddress.IPv4Address):
                         continue
                     m = nc + r['metric']
                     if prefix in sr and sr[prefix]['metric'] < m:
-                        _debug(' have better route to %s', p)
+                        _debug(' have better route to %s than %s', prefix, n)
                         continue
+                    _debug(' using %s via %s', prefix, n)
                     sr[prefix] = dict(metric=m, n=n, r=r)
         _debug(' remote routes: %s', sr)
         # Finally, override selected routes with local ones
@@ -441,6 +440,9 @@ class Babel:
     def source_gc_timer(self, sk):
         del self.sources[sk]
     def update_timer(self):
+        # Simplification from the official data model; we have only
+        # system-wide update timer.
+
         # 3.7.1
         for prefix, d in self.selected_routes.items():
             self.queue_update(prefix, d)
