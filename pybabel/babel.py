@@ -9,8 +9,8 @@
 # Copyright (c) 2015 Markus Stenberg
 #
 # Created:       Wed Mar 25 03:48:40 2015 mstenber
-# Last modified: Thu Mar 26 16:25:04 2015 mstenber
-# Edit time:     412 min
+# Last modified: Thu Mar 26 16:31:08 2015 mstenber
+# Edit time:     414 min
 #
 """
 
@@ -516,8 +516,7 @@ class Babel:
         self.maintain_feasibility(prefix, d)
         self.queue_update_tlv(prefix, d, *a)
     def queue_update_tlv(self, prefix, d, *a):
-        if 'rid' in d.get('r', {}):
-            self.queue_tlv(RID(rid=d['r']['rid']))
+        self.queue_tlv(RID(rid=d['r']['rid']))
         flags = 0
         omitted = 0
         interval = UPDATE_INTERVAL
@@ -540,7 +539,7 @@ class Babel:
             _error('invalid prefix in process_route_req_i: %s', tlv)
             return
         d = self.selected_routes.get(prefix)
-        d = d or {'metric': INF}
+        d = d or {'metric': INF, 'r': {'rid': self.rid}}
         self.queue_update_tlv(prefix, d)
     def process_seqno_req_n(self, n, tlv):
         i = n.i
