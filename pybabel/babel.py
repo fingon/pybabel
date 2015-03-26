@@ -9,8 +9,8 @@
 # Copyright (c) 2015 Markus Stenberg
 #
 # Created:       Wed Mar 25 03:48:40 2015 mstenber
-# Last modified: Thu Mar 26 00:15:25 2015 mstenber
-# Edit time:     302 min
+# Last modified: Thu Mar 26 05:25:42 2015 mstenber
+# Edit time:     309 min
 #
 """
 
@@ -268,8 +268,8 @@ class BabelInterface(TLVQueuer):
         return self.neighs[ip]
     def process_tlvs(self, address, tlvs):
         rid = None
-        nh = address
         default_prefix = {}
+        default_nh = {2: address}
         for tlv in tlvs:
             if isinstance(tlv, AckReq):
                 self.neighbor(address).queue_tlv(Ack(nonce=tlv.nonce),
@@ -284,7 +284,7 @@ class BabelInterface(TLVQueuer):
                 if tlv.flags & 0x40:
                     rid = tlv.body[-8:]
                 if tlv.omitted:
-                    d = {'ae': tlv.ae, 'body': default_prefix.get(ae, b'')[:tlv.omitted] + tlv.body}
+                    d = {'ae': tlv.ae, 'body': default_prefix.get(tlv.ae, b'')[:tlv.omitted] + tlv.body}
                 else:
                     d = tlv
                 if tlv.ae:
@@ -293,9 +293,10 @@ class BabelInterface(TLVQueuer):
                         prefix = tlv_to_prefix(d)
                     except:
                         continue
+                    nh = default_nh.get(tlv.ae, address)
                     self.neighbor(address).process_update(tlv, rid, prefix, nh)
                 else:
-                    self.neighbor(address).process_update_all(tlv, rid, nh)
+                    self.neighbor(address).process_update_all(tlv, rid, address)
             elif isinstance(tlv, RouteReq):
                 self.b.process_route_req_i(self, tlv)
             elif isinstance(tlv, SeqnoReq):
@@ -305,7 +306,7 @@ class BabelInterface(TLVQueuer):
             elif isinstance(tlv, NH):
                 # Unknown ones MUST be silently ignored
                 try:
-                    nh = tlv_to_ip_or_ll(tlv)
+                    default_nh[tlv.ae] = tlv_to_ip_or_ll(tlv)
                 except:
                     pass
     def queue_hello(self):
@@ -405,7 +406,7 @@ class Babel:
             # SHOULD be sent in timely manner
             self.queue_tlv(tlv, URGENT_JITTER)
         def _sr_to_set(sr):
-            return set([(p, d['n'].i.ifname, d['n'].ip)
+            return set([(p, d['n'].i.ifname, d.get('r', {}).get('nh', d['n'].ip))
                         for p, d in sr.items() if d['n']])
         s1 = _sr_to_set(self.selected_routes)
         s2 = _sr_to_set(sr)
