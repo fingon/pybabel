@@ -9,8 +9,8 @@
 # Copyright (c) 2015 Markus Stenberg
 #
 # Created:       Wed Mar 25 21:53:19 2015 mstenber
-# Last modified: Thu Mar 26 08:41:58 2015 mstenber
-# Edit time:     165 min
+# Last modified: Thu Mar 26 23:05:33 2015 mstenber
+# Edit time:     166 min
 #
 """
 
@@ -114,9 +114,10 @@ class LinuxSystemInterface(SystemInterface):
         self.send_unicast(ifname, BABEL_GROUP, b)
     def send_unicast(self, ifname, ip, b):
         _debug('send_unicast %s%%%s %d bytes' % (ip, ifname, len(b)))
-        a = '%s%%%s' % (ip, ifname)
-        #a = ip
-        babel.interface(ifname).s.sendto(b, (a, BABEL_PORT))
+        #a = '%s%%%s' % (ip, ifname)
+        a = ip
+        ifindex = socket.if_nametoindex(ifname)
+        babel.interface(ifname).s.sendto(b, (a, BABEL_PORT, 0, ifindex))
     def set_route(self, add, prefix, ifname, nhip):
         op = add and 'replace' or 'del'
         af = isinstance(prefix, ipaddress.IPv4Network) and "-4" or "-6"
