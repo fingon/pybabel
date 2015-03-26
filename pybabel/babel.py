@@ -9,8 +9,8 @@
 # Copyright (c) 2015 Markus Stenberg
 #
 # Created:       Wed Mar 25 03:48:40 2015 mstenber
-# Last modified: Thu Mar 26 08:22:59 2015 mstenber
-# Edit time:     362 min
+# Last modified: Thu Mar 26 12:26:24 2015 mstenber
+# Edit time:     377 min
 #
 """
 
@@ -30,20 +30,22 @@ _error = _logger.error
 
 # Source, Route, Pending Requests are simply dicts within Babel class.
 
+# These are from the official RFC6216 mentioned implementation defaults
 HELLO_INTERVAL = 4
 #IHU_INTERVAL = 3 * HELLO_INTERVAL # n/a here
 UPDATE_INTERVAL = 4 * HELLO_INTERVAL
 IHU_HOLD_TIME_MULTIPLIER = 3.5
 ROUTE_EXPIRY_TIME_MULTIPLIER = 3.5
 SOURCE_GC_TIME = 3 * 60
+
+# Maybe not in RFC6216?
+RECENT_HELLO_MULTIPLIER = 4.5 # mentioned in RFC6216?
+
+# Local hacky defaults
 URGENT_JITTER = 0.2
-HOP_COUNT = 16
-
-MY_METRIC = 100 # what it costs to visit us; no real metric calc here!
-
+HOP_COUNT = 127
+MY_METRIC = 256 # what it costs to visit us; no real metric calc here!
 MTU_ISH = 1400 # random MTU we use for splitting TLVs when we send stuff
-
-RECENT_HELLO_TIME = 60 # TBD - not clear in RFC!
 
 INF = 0xFFFF
 
@@ -157,6 +159,7 @@ class BabelNeighbor(TLVQueuer):
     def process_hello(self, tlv):
         _debug('%s process_hello', self)
         self.last_hello = self.get_sys().time()
+        self.hello_interval = _b2t(tlv.interval)
         self.i.b.route_selection()
     def process_ihu(self, tlv):
         _debug('%s process_ihu %s', self, tlv)
@@ -187,7 +190,10 @@ class BabelNeighbor(TLVQueuer):
         self.i.b.route_selection()
     def get_reception_cost(self):
         # Strictly speaking, this should be in get_cost, but this works too
-        if (self.get_sys().time() - self.last_hello) > RECENT_HELLO_TIME:
+        if not self.last_hello:
+            return INF
+        intervals_since = (self.get_sys().time() - self.last_hello) / self.hello_interval
+        if intervals_since > RECENT_HELLO_MULTIPLIER:
             return INF
         # TBD: real rxcost calc
         return MY_METRIC
@@ -198,7 +204,9 @@ class BabelNeighbor(TLVQueuer):
         rxcost = self.get_reception_cost()
         if rxcost == INF:
             return INF
-        return self.transmission_cost + rxcost
+        # Appendix A 2.2 alg (suggested by Juliusz)
+        cost = int(rxcost * max(self.transmission_cost, 256) / 256)
+        return min(INF-1, cost)
     def queue_ihu(self):
         rxcost = self.get_reception_cost()
         if rxcost == INF:
