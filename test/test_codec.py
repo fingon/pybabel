@@ -9,8 +9,8 @@
 # Copyright (c) 2015 Markus Stenberg
 #
 # Created:       Wed Mar 25 05:23:14 2015 mstenber
-# Last modified: Wed Mar 25 10:13:45 2015 mstenber
-# Edit time:     21 min
+# Last modified: Thu Mar 26 05:22:23 2015 mstenber
+# Edit time:     22 min
 #
 """
 
@@ -24,6 +24,10 @@ def test_packet():
     Packet.decode(Packet().encode())
     tlvs = [Ack(nonce=123), PadN(body=b'12')]
     assert Packet.decode(Packet(tlvs=tlvs).encode()).tlvs == tlvs
+
+def test_repr():
+    t = PadN(body=b'12')
+    assert t == "PadN(body=b'12')"
 
 def test_tlv_endecode():
     for cl, a in [

@@ -9,8 +9,8 @@
 # Copyright (c) 2015 Markus Stenberg
 #
 # Created:       Wed Mar 25 05:19:23 2015 mstenber
-# Last modified: Wed Mar 25 10:14:02 2015 mstenber
-# Edit time:     33 min
+# Last modified: Thu Mar 26 05:22:10 2015 mstenber
+# Edit time:     41 min
 #
 """
 
@@ -45,8 +45,12 @@ class Blob(EqMixin):
 class CStruct(Blob):
     format = None # subclass responsibility
     keys = [] # subclass responsibility
+    arkeys = None # additional repr-keys
     def __init__(self, **kw):
         Blob.__init__(self, **kw)
+    def __repr__(self):
+        return '%s(%s)' % (self.__class__.__name__,
+                           ', '.join(['%s=%s' % (k, v) for k, v in self.__dict__.items() if k in self.keys or k in self.arkeys]))
     def get_format(self):
         # We store this in __class__ instead of self (ugly but fast)
         if '_fmt' not in self.__class__.__dict__:
@@ -72,8 +76,8 @@ class Packet(CStruct):
     tlvs = []
     def decode_buffer(self, x):
         CStruct.decode_buffer(self, x)
-        assert self.magic == Packet.magic
-        assert self.version == Packet.version
+        if self.magic != Packet.magic: raise ValueError("wrong magic")
+        if self.version != Packet.version: raise ValueError("wrong version")
         self.tlvs = list(decode_tlvs(x[self.size():self.size()+self.length]))
     def encode(self):
         s = b''.join([x.encode() for x in self.tlvs])
@@ -88,6 +92,7 @@ class TLV(CStruct):
         return CStruct.encode(self)
 
 class BodyTLV(TLV):
+    arkeys = ['body']
     body = b''
     def decode_buffer(self, x, ofs=0):
         TLV.decode_buffer(self, x, ofs)
@@ -180,7 +185,7 @@ def ip_to_tlv_args(ip):
 
 def ll_to_tlv_args(ip):
     b = ip.packed[8:]
-    assert b # better have been IPv6..
+    if not b: raise ValueError("non-IPV4 address in ll_to_tlv_args")
     return {'ae': 3, 'body': b}
 
 def prefix_to_tlv_args(prefix):
@@ -195,7 +200,7 @@ def tlv_to_prefix(tlv):
     if tlv.ae == 1:
         b = tlv.body + bytes(4 - len(tlv.body))
     else:
-        assert tlv.ae == 2
+        if tlv.ae != 2: raise ValueError("unsupported af in tlv_to_prefix")
         b = tlv.body + bytes(16 - len(tlv.body))
     na = ipaddress.ip_address(b)
     return ipaddress.ip_network('%s/%d' % (na.compressed, tlv.plen))
@@ -203,6 +208,6 @@ def tlv_to_prefix(tlv):
 def tlv_to_ip_or_ll(tlv):
     if tlv.ae in [1, 2]:
         return ipaddress.ip_address(tlv.body)
-    assert tlv.ae == 3
+    if tlv.ae != 3: raise ValueError("unsupported af in tlv_to_ip_or_ll")
     b = ipaddress.ip_address('fe80::').packed[:8] + tlv.body
     return ipaddress.ip_address(b)
