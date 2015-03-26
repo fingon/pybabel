@@ -11,6 +11,8 @@ refers to one
 link cost = cost mean?
 
 3.5.5 describes what is done in 3.5.4, but to little point (imho)
+.. ah, no, I was wrong, unfortunately (Nth reading; need to maintain
+blackhole routes)
 
 3.6 'unfeasible route' = ?.. I assumed route table only contains feasible
 routes to start with?
