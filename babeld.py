@@ -9,8 +9,8 @@
 # Copyright (c) 2015 Markus Stenberg
 #
 # Created:       Wed Mar 25 21:53:19 2015 mstenber
-# Last modified: Thu Mar 26 16:25:42 2015 mstenber
-# Edit time:     174 min
+# Last modified: Thu Mar 26 17:08:26 2015 mstenber
+# Edit time:     176 min
 #
 """
 
@@ -134,8 +134,6 @@ def setup_babel(iflist):
     group_bin = socket.inet_pton(addrinfo[0], addrinfo[4][0])
     s = socket.socket(family=socket.AF_INET6, type=socket.SOCK_DGRAM)
     s.bind(('', BABEL_PORT))
-    mreq = group_bin + struct.pack('@I', 0)
-    s.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_JOIN_GROUP, mreq)
     s.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_MULTICAST_LOOP, False)
     def _f():
         data, addr = s.recvfrom(2**16)
@@ -146,6 +144,9 @@ def setup_babel(iflist):
     for ifname in iflist:
         ifo = babel.interface(ifname)
         ifo.s = s
+        ifindex = socket.if_nametoindex(ifname)
+        mreq = group_bin + struct.pack('@I', ifindex)
+        s.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_JOIN_GROUP, mreq)
 
 
 
