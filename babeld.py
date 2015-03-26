@@ -9,8 +9,8 @@
 # Copyright (c) 2015 Markus Stenberg
 #
 # Created:       Wed Mar 25 21:53:19 2015 mstenber
-# Last modified: Thu Mar 26 01:10:07 2015 mstenber
-# Edit time:     114 min
+# Last modified: Thu Mar 26 05:28:20 2015 mstenber
+# Edit time:     141 min
 #
 """
 
@@ -112,12 +112,13 @@ class LinuxSystemInterface(SystemInterface):
         self.send_unicast(ifname, BABEL_GROUP, b)
     def send_unicast(self, ifname, ip, b):
         _debug('send_unicast %s%%%s %d bytes' % (ip, ifname, len(b)))
-        #a = '%s%%%s' % (ip, ifname)
-        a = ip
+        a = '%s%%%s' % (ip, ifname)
+        #a = ip
         babel.interface(ifname).s.sendto(b, (a, BABEL_PORT))
     def set_route(self, add, prefix, ifname, nhip):
         op = add and 'replace' or 'del'
-        cmd = 'ip -6 route %(op)s %(prefix)s via %(nhip)s dev %(ifname)s' % locals()
+        af = isinstance(prefix, ipaddress.IPv4Network) and "-4" or "-6"
+        cmd = 'ip %(af)s route %(op)s %(prefix)s via %(nhip)s dev %(ifname)s' % locals()
         print('# %s' % cmd)
         os.system(cmd)
 
@@ -135,26 +136,32 @@ if args.debug:
     import logging
     logging.basicConfig(level=logging.DEBUG)
 
+
+
 def setup():
     addrinfo = socket.getaddrinfo(BABEL_GROUP, None)[0]
     group_bin = socket.inet_pton(addrinfo[0], addrinfo[4][0])
+    s = socket.socket(family=socket.AF_INET6, type=socket.SOCK_DGRAM)
+    s.bind(('', BABEL_PORT))
+    mreq = group_bin + struct.pack('@I', 0)
+    s.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_JOIN_GROUP, mreq)
+    #s.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_RECVPKTINFO, True)
+    def _f():
+        data, anc, flags, addr = s.recvmsg(2**16, 0)
+        # TBD: do we _need_ pktinfo actually?
+        #ifname = None
+        #for level, type, data in anc:
+        #    if type == socket.IPV6_PKTINFO:
+        #        (ifindex,) = struct.unpack('@I', data[16:])
+        #        ifname = socket.if_indextoname(ifindex)
+        # however.. we can get ifname just from addr?
+        ads, ifname = addr[0].split('%')
+        a = ipaddress.ip_address(ads)
+        babel.process_inbound(ifname, a, data)
+    sys.add_reader(s, _f)
     for ifname in args.ifname:
         ifo = babel.interface(ifname)
-        s = socket.socket(family=socket.AF_INET6, type=socket.SOCK_DGRAM)
-        ifindex = socket.if_nametoindex(ifname)
-        s.bind((ifo.ip.compressed, BABEL_PORT, 0, ifindex))
         ifo.s = s
-        def _f():
-            data, addr = s.recvfrom(2**16)
-            a = ipaddress.ip_address(addr[0].split('%')[0])
-            ifo.b.process_inbound(ifname, a, data)
-            # Workaround - seems to bug somehow
-            #loop.remove_reader(s.fileno())
-            #loop.add_reader(s.fileno(), _f)
-        #s.setsockopt(socket.SOL_SOCKET, socket.SO_BINDTODEVICE, ifname.encode('ascii')+bytes([0]))
-        mreq = group_bin + struct.pack('@I', ifindex)
-        s.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_JOIN_GROUP, mreq)
-        sys.add_reader(s, _f)
 
 setup()
 sys.loop()
