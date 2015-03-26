@@ -9,8 +9,8 @@
 # Copyright (c) 2015 Markus Stenberg
 #
 # Created:       Wed Mar 25 03:48:40 2015 mstenber
-# Last modified: Thu Mar 26 05:38:26 2015 mstenber
-# Edit time:     355 min
+# Last modified: Thu Mar 26 08:22:59 2015 mstenber
+# Edit time:     362 min
 #
 """
 
@@ -38,6 +38,8 @@ ROUTE_EXPIRY_TIME_MULTIPLIER = 3.5
 SOURCE_GC_TIME = 3 * 60
 URGENT_JITTER = 0.2
 HOP_COUNT = 16
+
+MY_METRIC = 100 # what it costs to visit us; no real metric calc here!
 
 MTU_ISH = 1400 # random MTU we use for splitting TLVs when we send stuff
 
@@ -188,7 +190,7 @@ class BabelNeighbor(TLVQueuer):
         if (self.get_sys().time() - self.last_hello) > RECENT_HELLO_TIME:
             return INF
         # TBD: real rxcost calc
-        return 1
+        return MY_METRIC
     def get_cost(self):
         # 3.4.3
         if self.transmission_cost == INF:
@@ -411,8 +413,9 @@ class Babel:
         _debug(' remote routes: %s', sr)
         # Finally, override selected routes with local ones
         for prefix in self.local_routes:
-            r = dict(rid=self.rid, seqno=self.seqno, metric=0)
-            sr[prefix] = dict(metric=0, n=None, r=r)
+            r = dict(rid=self.rid, seqno=self.seqno, metric=MY_METRIC)
+            # TBD local metric?
+            sr[prefix] = dict(metric=MY_METRIC, n=None, r=r)
         # 3.7.2 (triggered updates)
         for prefix, d in sr.items():
             if not prefix in self.selected_routes:
@@ -485,9 +488,6 @@ class Babel:
     def queue_update_tlv(self, prefix, d, *a):
         if 'rid' in d.get('r', {}):
             self.queue_tlv(RID(rid=d['r']['rid']))
-        self.queue_tlv(self.to_update_tlv(prefix, d), *a)
-
-    def to_update_tlv(self, prefix, d):
         flags = 0
         omitted = 0
         interval = UPDATE_INTERVAL
@@ -495,7 +495,7 @@ class Babel:
         u = Update(flags=flags, omitted=omitted, interval=_t2b(interval),
                    seqno=r.get('seqno', 0), metric=d['metric'],
                    **prefix_to_tlv_args(prefix))
-        return u
+        self.queue_tlv(u, *a)
     def process_route_req_i(self, i, tlv):
         # 3.8.1.1
         if tlv.ae == 0:
