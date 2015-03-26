@@ -9,8 +9,8 @@
 # Copyright (c) 2015 Markus Stenberg
 #
 # Created:       Wed Mar 25 05:23:14 2015 mstenber
-# Last modified: Thu Mar 26 05:22:23 2015 mstenber
-# Edit time:     22 min
+# Last modified: Thu Mar 26 05:38:57 2015 mstenber
+# Edit time:     23 min
 #
 """
 
@@ -27,7 +27,7 @@ def test_packet():
 
 def test_repr():
     t = PadN(body=b'12')
-    assert t == "PadN(body=b'12')"
+    assert repr(t) == "PadN(body=b'12')"
 
 def test_tlv_endecode():
     for cl, a in [

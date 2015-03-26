@@ -9,8 +9,8 @@
 # Copyright (c) 2015 Markus Stenberg
 #
 # Created:       Wed Mar 25 03:48:40 2015 mstenber
-# Last modified: Thu Mar 26 05:23:08 2015 mstenber
-# Edit time:     348 min
+# Last modified: Thu Mar 26 05:38:26 2015 mstenber
+# Edit time:     355 min
 #
 """
 
@@ -94,9 +94,29 @@ class TLVQueuer:
     def get_sys(self):
         raise NotImplementedError
 
+def sort_and_eliminate_tlvs_with_same_rid(tlvs):
+    # Note: this is not really generic; instead, we _know_ we have RID
+    # before every TLV that needs one..
+    rid = None
+    by_rid = collections.defaultdict(list)
+    for tlv in tlvs:
+        if isinstance(tlv, RID):
+            rid = tlv.rid
+        elif rid:
+            by_rid[rid].append(tlv)
+            rid = None
+        else:
+            yield tlv
+    for rid, l in by_rid.items():
+        yield RID(rid=rid)
+        for e in l:
+            yield e
+
 def split_tlvs_to_tlv_lists(tlvs):
     c = 4 # packet header
     l = []
+    # TBD: could do clever things to Update TLVs here but out of scope
+    # (address compression)
     for tlv in tlvs:
         tl = len(tlv.encode())
         if tl + c > MTU_ISH:
@@ -109,6 +129,7 @@ def split_tlvs_to_tlv_lists(tlvs):
         yield l
 
 def split_tlvs_to_packets(tlvs):
+    tlvs = sort_and_eliminate_tlvs_with_same_rid(tlvs)
     # SHOULD maximize size, but MUST NOT send larger than ..
     for tlvs in split_tlvs_to_tlv_lists(tlvs):
         yield Packet(tlvs=tlvs).encode()
