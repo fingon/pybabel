@@ -9,8 +9,8 @@
 # Copyright (c) 2015 Markus Stenberg
 #
 # Created:       Wed Mar 25 21:53:19 2015 mstenber
-# Last modified: Thu Mar 26 04:54:15 2015 mstenber
-# Edit time:     143 min
+# Last modified: Thu Mar 26 08:41:58 2015 mstenber
+# Edit time:     165 min
 #
 """
 
@@ -27,6 +27,7 @@ import socket
 import ipaddress
 import struct
 import select
+import re
 
 import logging
 _logger = logging.getLogger(__name__)
@@ -34,6 +35,8 @@ _debug = _logger.debug
 
 BABEL_GROUP = 'ff02::1:6'
 BABEL_PORT = 6696
+
+IMPORT_INTERVAL = 30
 
 protocol = None
 
@@ -64,6 +67,7 @@ class LinuxSystemInterface(SystemInterface):
     def __init__(self):
         self.timeouts = []
         self.readers = {}
+        self.system('ip -6 route flush proto 42')
     time = time.time
     random = random.random
     def add_reader(self, s, cb):
@@ -98,7 +102,7 @@ class LinuxSystemInterface(SystemInterface):
     def get_rid(self):
         l = list(os.popen('ip link | grep link/ether').readlines())
         if not l:
-            return bytes([1,2,3,4,5,6])
+            return bytes(range(RID_LEN))
         d = l[0].strip().split(' ')[1]
         b = bytes([int(x, 16) for x in d.split(':')])
         return b
@@ -116,11 +120,13 @@ class LinuxSystemInterface(SystemInterface):
     def set_route(self, add, prefix, ifname, nhip):
         op = add and 'replace' or 'del'
         af = isinstance(prefix, ipaddress.IPv4Network) and "-4" or "-6"
-        cmd = 'ip %(af)s route %(op)s %(prefix)s via %(nhip)s dev %(ifname)s' % locals()
+        cmd = 'ip %(af)s route %(op)s %(prefix)s via %(nhip)s dev %(ifname)s proto 42' % locals()
+        self.system(cmd)
+    def system(self, cmd):
         print('# %s' % cmd)
         os.system(cmd)
 
-def setup(iflist):
+def setup_babel(iflist):
     addrinfo = socket.getaddrinfo(BABEL_GROUP, None)[0]
     group_bin = socket.inet_pton(addrinfo[0], addrinfo[4][0])
     s = socket.socket(family=socket.AF_INET6, type=socket.SOCK_DGRAM)
@@ -138,20 +144,44 @@ def setup(iflist):
         ifo = babel.interface(ifname)
         ifo.s = s
 
+
+
+def _import_timer(relist):
+    _debug('_import_timer')
+    local_routes = set()
+    for line in os.popen('ip -6 route'):
+        if line.find('proto 42') > 0:
+            continue
+        _debug('considering %s', line.strip())
+        matching_res = [r for r in relist if r.search(line) is not None]
+        if not matching_res:
+            _debug('no match')
+            continue
+        dst = line.strip().split()[0]
+        if dst == 'default': dst = '::/0'
+        local_routes.add(ipaddress.ip_network(dst))
+    if babel.local_routes != local_routes:
+        _debug('updating local routes to %s', local_routes)
+        babel.local_routes = local_routes
+        babel.route_selection()
+    sys.call_later(IMPORT_INTERVAL, _import_timer, relist)
+
 if __name__ == '__main__':
     import argparse
     ap = argparse.ArgumentParser()
+    ap.add_argument('-i', '--import-re', action='append', help='Import regexp')
+    ap.add_argument('-d', '--debug', action='store_true', help='Enable debugging')
     ap.add_argument('ifname',
-                    nargs='*',
+                    nargs='+',
                     help="Interfaces to listen on.")
-    ap.add_argument('-d', '--debug', action='store_true')
     args = ap.parse_args()
-
     sys = LinuxSystemInterface()
     babel = Babel(sys)
     if args.debug:
         import logging
         logging.basicConfig(level=logging.DEBUG)
 
-    setup(args.ifname)
+    setup_babel(args.ifname)
+    if args.import_re:
+        _import_timer(list([re.compile(x) for x in args.import_re]))
     sys.loop()
