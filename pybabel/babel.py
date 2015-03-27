@@ -9,8 +9,8 @@
 # Copyright (c) 2015 Markus Stenberg
 #
 # Created:       Wed Mar 25 03:48:40 2015 mstenber
-# Last modified: Thu Mar 26 16:58:00 2015 mstenber
-# Edit time:     435 min
+# Last modified: Fri Mar 27 07:58:29 2015 mstenber
+# Edit time:     439 min
 #
 """
 
@@ -435,6 +435,9 @@ class Babel:
                         m = min(INF-1, nc + r['metric'])
                     if prefix in sr and sr[prefix]['metric'] < m:
                         continue
+                    # Do not add new route as blackhole route
+                    if prefix not in self.selected_routes and m == INF:
+                        continue
                     sr[prefix] = dict(metric=m, n=n, r=r)
         _debug(' remote routes: %s', sr)
         # Finally, override selected routes with local ones
@@ -472,7 +475,6 @@ class Babel:
         s2 = set([k for k in sr.keys() if sr[k]['n']])
         # New routes
         for p in s2.difference(s1):
-            if sr[p]['metric'] == INF: continue
             self.sys.set_route(op=OP_ADD, prefix=p, **_to_route(sr[p]))
         # Updated routes
         for p in s1.intersection(s2):

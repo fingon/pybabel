@@ -9,8 +9,8 @@
 # Copyright (c) 2015 Markus Stenberg
 #
 # Created:       Wed Mar 25 10:46:15 2015 mstenber
-# Last modified: Thu Mar 26 16:21:35 2015 mstenber
-# Edit time:     103 min
+# Last modified: Fri Mar 27 07:59:07 2015 mstenber
+# Edit time:     104 min
 #
 """
 
@@ -233,10 +233,8 @@ def test_babel_flap():
     assert fs.routes_are_sane()
 
     assert len(b1.sys.route_changes) == 0
-    assert len(b2.sys.route_changes) <= 2
-    #assert b2.sys.route_changes[-1] == dict(op=OP_DEL, blackhole=True, prefix=prefix)
-    #assert b2.sys.route_changes[-2] == dict(op=OP_ADD, prefix=prefix, ifname='i2', nh=addr)
-    # depending on ordering (timing) we may or may not have initial blackhole. grr.
+    assert len(b2.sys.route_changes) == 1
+    assert b2.sys.route_changes == [dict(op=OP_ADD, prefix=prefix, ifname='i2', nh=addr)]
     b2.sys.route_changes = []
 
     fs.set_connected((b1.sys, 'i1'), (b2.sys, 'i2'), False)
