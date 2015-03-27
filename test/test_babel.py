@@ -9,8 +9,8 @@
 # Copyright (c) 2015 Markus Stenberg
 #
 # Created:       Wed Mar 25 10:46:15 2015 mstenber
-# Last modified: Fri Mar 27 07:59:07 2015 mstenber
-# Edit time:     104 min
+# Last modified: Fri Mar 27 08:12:13 2015 mstenber
+# Edit time:     105 min
 #
 """
 
@@ -129,8 +129,8 @@ class FakeSystem:
                 return False
         # Have to have same set of selected routes
         for i in range(1, len(bl)):
-            k1 = bl[0].get_valid_selected_routes().keys()
-            k2 = bl[i].get_valid_selected_routes().keys()
+            k1 = bl[0].valid_selected_routes.keys()
+            k2 = bl[i].valid_selected_routes.keys()
             if k1 != k2:
                 _debug('_converged .. not: route key delta %s<>%s' % (k1, k2))
                 return False

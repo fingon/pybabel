@@ -9,8 +9,8 @@
 # Copyright (c) 2015 Markus Stenberg
 #
 # Created:       Wed Mar 25 03:48:40 2015 mstenber
-# Last modified: Fri Mar 27 07:58:29 2015 mstenber
-# Edit time:     439 min
+# Last modified: Fri Mar 27 08:16:24 2015 mstenber
+# Edit time:     451 min
 #
 """
 
@@ -376,6 +376,14 @@ class BabelInterface(TLVQueuer):
             self.get_sys().send_multicast(self.ifname, b)
 
 class Babel:
+    # Every time freshly initialized structures -> can be defined here
+
+    selected_routes = {}
+    # [prefix] = {'metric', 'n', 'r' => route struct within n.routes (but may be historic copy too!}
+
+    valid_selected_routes = {}
+    # selected_routes with metric < INF
+
     def __init__(self, sys):
         assert isinstance(sys, SystemInterface)
         self.sys = sys
@@ -390,11 +398,13 @@ class Babel:
         # source table, per 3.2.4
         # [(prefix, rid)] = {'seqno', 'metric', 'timer'}
 
-        self.requests = {} # pending request table, per 3.2.6
+        # resending is a SHOULD
+        #self.requests = {} # pending request table, per 3.2.6
         # [prefix] = {'rid', 'seqno', 'neigh', 'times', 'timer'}
 
-        self.selected_routes = {}
-        # [prefix] = {'metric', 'n', 'r' => route struct within n.routes (but may be historic copy too!}
+        # TBD keeping track of forwarded requests is also a SHOULD;
+        # should it use same pending request table? probably not..
+
         self.local_routes = set()
 
         self.update_timer()
@@ -445,27 +455,6 @@ class Babel:
             r = dict(rid=self.rid, seqno=self.seqno, metric=MY_METRIC)
             # TBD local metric?
             sr[prefix] = dict(metric=MY_METRIC, n=None, r=r)
-        # 3.7.2 (triggered updates)
-        for prefix, d in sr.items():
-            if not prefix in self.selected_routes:
-                continue
-            d2 = self.selected_routes[prefix]
-            # MUST send update in timely manner if rid changes
-            if d2['r']['rid'] != d['r']['rid']:
-                self.queue_update(prefix, d, URGENT_JITTER)
-        for prefix, d in self.selected_routes.items():
-            if d['metric'] == INF: continue # was <INF, now should be INF
-            if prefix in sr and sr[prefix]['metric'] < INF:
-                continue
-            # SHOULD send if route redacted
-            self.queue_update(prefix, d, URGENT_JITTER)
-            # 3.8.2.1 MUST send seqno request (no feasible routes)
-            tlv = SeqnoReq(seqno=d['r']['seqno'] + 1,
-                           hopcount=HOP_COUNT,
-                           rid=d['r']['rid'],
-                           **prefix_to_tlv_args(prefix))
-            # SHOULD be sent in timely manner
-            self.queue_tlv(tlv, URGENT_JITTER)
         def _to_route(d):
             ifname = d['n'].i.ifname
             nh = d.get('r', {}).get('nh', d['n'].ip)
@@ -478,6 +467,10 @@ class Babel:
             self.sys.set_route(op=OP_ADD, prefix=p, **_to_route(sr[p]))
         # Updated routes
         for p in s1.intersection(s2):
+            # 3.7.2 (triggered updates)
+            # MUST send update in timely manner if rid changes
+            if sr[p]['r']['rid'] != sr0[p]['r']['rid']:
+                self.queue_update(prefix, sr[p], URGENT_JITTER)
             # If state is unchanged, ignore
             if (sr0[p]['metric'] == INF) == (sr[p]['metric'] == INF):
                 continue
@@ -485,6 +478,17 @@ class Babel:
                 # Fresh blackhole
                 self.sys.set_route(op=OP_DEL, prefix=p, **_to_route(sr[p]))
                 self.sys.set_route(blackhole=True, op=OP_ADD, prefix=p)
+
+                # 3.7.2 SHOULD send if route redacted
+                self.queue_update(prefix, sr[p], URGENT_JITTER)
+
+                # 3.8.2.1 MUST send seqno request (no feasible routes)
+                tlv = SeqnoReq(seqno=sr[p]['r']['seqno'] + 1,
+                               hopcount=HOP_COUNT,
+                               rid=sr[p]['r']['rid'],
+                               **prefix_to_tlv_args(prefix))
+                # SHOULD be sent in timely manner
+                self.queue_tlv(tlv, URGENT_JITTER)
             else:
                 # No longer blackhole
                 self.sys.set_route(blackhole=True, op=OP_DEL, prefix=p)
@@ -493,9 +497,8 @@ class Babel:
         for p in s1.difference(s2):
             self.sys.set_route(blackhole=True, op=OP_DEL, prefix=p)
         self.selected_routes = sr
-    def get_valid_selected_routes(self):
-        return dict([(k, v) for (k, v) in self.selected_routes.items()
-                     if self.selected_routes[k]['metric'] < INF])
+        vsr = dict([(k, v) for (k, v) in sr.items() if sr[k]['metric'] < INF])
+        self.valid_selected_routes = vsr
     def maintain_feasibility(self, prefix, d):
         # 3.7.3 maintain feasibility distance
         if d['metric'] == INF:
@@ -526,7 +529,7 @@ class Babel:
         # system-wide update timer.
 
         # 3.7.1
-        for prefix, d in self.selected_routes.items():
+        for prefix, d in self.valid_selected_routes.items():
             self.queue_update(prefix, d)
         self.sys.call_later(UPDATE_INTERVAL, self.update_timer)
     def queue_tlv(self, tlv, *a):
@@ -551,7 +554,7 @@ class Babel:
         # 3.8.1.1
         if tlv.ae == 0:
             # SHOULD send full routing table dump
-            for prefix, d in self.selected_routes.items():
+            for prefix, d in self.valid_selected_routes.items():
                 self.queue_update_tlv(prefix, d)
             return
         # MUST send an update to individual req.
@@ -560,7 +563,7 @@ class Babel:
         except ValueError:
             _error('invalid prefix in process_route_req_i: %s', tlv)
             return
-        d = self.selected_routes.get(prefix)
+        d = self.valid_selected_routes.get(prefix)
         d = d or {'metric': INF, 'r': {'rid': self.rid}}
         self.queue_update_tlv(prefix, d)
     def process_seqno_req_n(self, n, tlv):
@@ -571,9 +574,8 @@ class Babel:
         except ValueError:
             _error('invalid prefix in process_seqno_req_n: %s', tlv)
             return
-        d = self.selected_routes.get(prefix)
+        d = self.valid_selected_routes.get(prefix)
         if d is None: return # not present, ignored
-        if d['metric'] == INF: return # infinite metric
         r = d['r']
         if tlv.rid != r['rid'] or tlv.seqno <= r['seqno']:
             # MUST send update if prefix varies or
