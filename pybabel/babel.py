@@ -9,8 +9,8 @@
 # Copyright (c) 2015 Markus Stenberg
 #
 # Created:       Wed Mar 25 03:48:40 2015 mstenber
-# Last modified: Fri Mar 27 08:16:24 2015 mstenber
-# Edit time:     451 min
+# Last modified: Fri Mar 27 08:48:15 2015 mstenber
+# Edit time:     472 min
 #
 """
 
@@ -46,6 +46,7 @@ URGENT_JITTER = 0.2
 HOP_COUNT = 127
 MY_METRIC = 256 # what it costs to visit us; no real metric calc here!
 MTU_ISH = 1400 # random MTU we use for splitting TLVs when we send stuff
+SEQNO_RESEND_TIMES = 3
 
 INF = 0xFFFF
 
@@ -384,6 +385,10 @@ class Babel:
     valid_selected_routes = {}
     # selected_routes with metric < INF
 
+    recently_forwarded_seqnoreq_set = set()
+    # set of forwarded requests, cleared every time we do update_timer
+    # (this is a SHOULD)
+
     def __init__(self, sys):
         assert isinstance(sys, SystemInterface)
         self.sys = sys
@@ -398,12 +403,9 @@ class Babel:
         # source table, per 3.2.4
         # [(prefix, rid)] = {'seqno', 'metric', 'timer'}
 
-        # resending is a SHOULD
         #self.requests = {} # pending request table, per 3.2.6
         # [prefix] = {'rid', 'seqno', 'neigh', 'times', 'timer'}
-
-        # TBD keeping track of forwarded requests is also a SHOULD;
-        # should it use same pending request table? probably not..
+        # n/a - implemented otherwise
 
         self.local_routes = set()
 
@@ -483,12 +485,7 @@ class Babel:
                 self.queue_update(prefix, sr[p], URGENT_JITTER)
 
                 # 3.8.2.1 MUST send seqno request (no feasible routes)
-                tlv = SeqnoReq(seqno=sr[p]['r']['seqno'] + 1,
-                               hopcount=HOP_COUNT,
-                               rid=sr[p]['r']['rid'],
-                               **prefix_to_tlv_args(prefix))
-                # SHOULD be sent in timely manner
-                self.queue_tlv(tlv, URGENT_JITTER)
+                self.repeat_queue_seqno_req(p)
             else:
                 # No longer blackhole
                 self.sys.set_route(blackhole=True, op=OP_DEL, prefix=p)
@@ -499,6 +496,20 @@ class Babel:
         self.selected_routes = sr
         vsr = dict([(k, v) for (k, v) in sr.items() if sr[k]['metric'] < INF])
         self.valid_selected_routes = vsr
+    def repeat_queue_seqno_req(self, p, times=SEQNO_RESEND_TIMES):
+        d = self.selected_routes[p]
+        # Ensure route is in blackhole mode
+        if not d or d['metric'] < INF: return
+        tlv = SeqnoReq(seqno=sr[p]['r']['seqno'] + 1,
+                       hopcount=HOP_COUNT,
+                       rid=sr[p]['r']['rid'],
+                       **prefix_to_tlv_args(prefix))
+        # SHOULD be sent in timely manner
+        self.queue_tlv(tlv, URGENT_JITTER)
+        if times > 1:
+            # resending is a SHOULD
+            self.sys.call_later(URGENT_JITTER * 2,
+                                self.repeat_queue_seqno_req, p, times - 1)
     def maintain_feasibility(self, prefix, d):
         # 3.7.3 maintain feasibility distance
         if d['metric'] == INF:
@@ -532,6 +543,7 @@ class Babel:
         for prefix, d in self.valid_selected_routes.items():
             self.queue_update(prefix, d)
         self.sys.call_later(UPDATE_INTERVAL, self.update_timer)
+        self.recently_forwarded_seqnoreq_set = set()
     def queue_tlv(self, tlv, *a):
         for i in self.ifs.values():
             i.queue_tlv(tlv, *a)
@@ -576,33 +588,44 @@ class Babel:
             return
         d = self.valid_selected_routes.get(prefix)
         if d is None: return # not present, ignored
-        r = d['r']
-        if tlv.rid != r['rid'] or tlv.seqno <= r['seqno']:
+
+        rid, seqno = d['r']['rid'], d['r']['seqno']
+
+        # first handle option: own rid, too high seqno ->
+        # increment seqno
+        if tlv.seqno > seqno and tlv.rid == self.rid:
+            self.seqno += 1
+            d['r']['seqno'] = self.seqno
+        if rid == self.rid or tlv.seqno <= seqno:
             # MUST send update if prefix varies or
             # ' no smaller'
             self.queue_update_tlv(prefix, d)
+            # (also handle own sending here)
             return
-        if tlv.rid == r['rid'] and tlv.seqno > r['seqno']:
-            if tlv.rid == self.rid:
-                self.seqno += 1
-                r['seqno'] += self.seqno
-                self.queue_update_tlv(prefix, d)
-                return
-            if tlv.hopcount >= 2:
-                best = None
-                for i2 in self.ifs.values():
-                    for n2 in i2.neighs.values():
-                        r2 = n2.routes.get(prefix)
-                        if not r2: continue
-                        if r2['metric'] == INF: continue
-                        if n2.get_cost() == INF: continue
-                        if n2 == n: continue
-                        if not best or best[0] > n2.get_cost():
-                            best = [n2.get_cost(), n2]
-                # MUST be forwarded to single neighbor only
-                if best:
-                    tlv2 = SeqnoReq(seqno=tlv.seqno,
-                                    hopcount=tlv.hopcount-1,
-                                    rid=tlv.rid,
-                                    **prefix_to_tlv_args(prefix))
-                    best[1].queue_tlv(tlv2, URGENT_JITTER)
+
+        # not us, seqno > what we know; forward
+
+        # SHOULD keep track of recently forwarded requests
+        rk = (tlv.rid, tlv.seqno)
+        if rk in self.recently_forwarded_seqnoreq_set:
+            return
+        self.recently_forwarded_seqnoreq_set.add(rk)
+        if tlv.hopcount < 2:
+            return
+        best = None
+        for i2 in self.ifs.values():
+            for n2 in i2.neighs.values():
+                r2 = n2.routes.get(prefix)
+                if not r2: continue
+                if r2['metric'] == INF: continue
+                if n2.get_cost() == INF: continue
+                if n2 == n: continue
+                if not best or best[0] > n2.get_cost():
+                    best = [n2.get_cost(), n2]
+        # MUST be forwarded to single neighbor only
+        if best:
+            tlv2 = SeqnoReq(seqno=tlv.seqno,
+                            hopcount=tlv.hopcount-1,
+                            rid=tlv.rid,
+                            **prefix_to_tlv_args(prefix))
+            best[1].queue_tlv(tlv2, URGENT_JITTER)
