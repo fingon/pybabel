@@ -9,8 +9,8 @@
 # Copyright (c) 2015 Markus Stenberg
 #
 # Created:       Wed Mar 25 10:46:15 2015 mstenber
-# Last modified: Fri Mar 27 08:12:13 2015 mstenber
-# Edit time:     105 min
+# Last modified: Fri Mar 27 13:25:40 2015 mstenber
+# Edit time:     156 min
 #
 """
 
@@ -203,7 +203,7 @@ def test_babel():
     ifo = b1.interface('i1')
     ifo.tlv_q = []
     rr = RouteReq(ae=0)
-    add = ipaddress.ip_address('2001:db8::1')
+    add = ipaddress.ip_address('fe80::1')
     ifo.process_tlvs(add, [rr])
     assert ifo.tlv_q[-1].metric != INF
 
@@ -254,19 +254,18 @@ def _test_babel_tree(n, brf, ifc):
     for i in range(n):
         b = fs.add_babel()
         j = i // brf
-        if i == j:
-            # root-ish
-            continue
-        ifn = 'down%d' % (i % brf % ifc)
-        b2 = fs.babels[j]
-        fs.set_connected((b2.sys, ifn), (b.sys, 'up'), bidir=True)
-        b.interface('up')
-        b2.interface(ifn)
+        if i != j:
+            ifn = 'down%d' % (i % brf % ifc)
+            b2 = fs.babels[j]
+            fs.set_connected((b2.sys, ifn), (b.sys, 'up'), bidir=True)
+            b.interface('up')
+            b2.interface(ifn)
         # Add one local route to each node
         prefix = ipaddress.ip_network('2001:db8:%d::/48' % i)
         b.local_routes.add(prefix)
     fs.run_until(fs.converged, max_iterations=10000)
     assert fs.routes_are_sane()
+    return fs
 
 def test_babel_tree_small():
     _test_babel_tree(7, 2, 1)
@@ -276,4 +275,152 @@ def _test_babel_tree_small_2():
 
 def _test_babel_tree_big():
     _test_babel_tree(13, 5, 3)
+
+
+def test_rfc6126_must():
+    fs = _test_babel_tree(3, 2, 1)
+    (b0, b1, b2) = fs.babels
+    uiname = 'up'
+    diname = 'down0'
+    fakep = ipaddress.ip_network('dead:beef::/32')
+
+    # 3.1: Ack TLV MUST be sent <= deadline
+    # 3.3: MUST be able to respond to AckReq (.. with Ack)
+    # 3.3: Ack MUST be sent to a unicast destination
+    fakea = ipaddress.ip_address('fe80::1')
+    fakea2 = ipaddress.ip_address('fe80::2')
+    bdi = b0.interface(diname)
+    bdi.process_tlvs(fakea, [AckReq(interval=1, nonce=123)])
+    bdin = bdi.neighbor(fakea)
+    assert bdin.tlv_q and bdin.tlv_t <= fs.t + 0.02
+    bdin.tlv_send_timer()
+
+    # 3.4.3: MUST be strictly positive cost, and INF
+    # if no recent hellos / txcost INF
+    # TBD (how to test?)
+
+    # 3.5.2: c inf => M(c, m) = inf, M(c, m) > m
+    # TBD (how to test?)
+
+    # 3.5.5: MUST NOT be forwarded in blackhole state
+    # (done in test_babel; blackhole routes are created)
+
+    # 3.6: INF metric MUST NOT be selected; unfeasible route MUST NOT
+    # be selected
+    # (implied strongly; valid_selected_routes)
+
+
+    # 3.1: 3.7.2 updates MUST be sent in timely manner
+    # 3.7.2: MUST send a triggered update if rid changes for dest
+    if bdi.tlv_q: bdi.tlv_send_timer()
+    rprefix = list(b2.local_routes)[0]
+    fakerid = b'12345678'
+    bdi.process_tlvs(fakea, [Hello(seqno=123, interval=1),
+                             IHU(rxcost=1, interval=1, **ll_to_tlv_args(bdi.ip)),
+                             RID(rid=fakerid),
+                             Update(flags=0, omitted=0, interval=1, seqno=123,
+                                    metric=1, **prefix_to_tlv_args(rprefix))])
+    assert bdi.tlv_q and bdi.tlv_t <= fs.t + URGENT_JITTER
+    assert len([tlv for tlv in bdi.tlv_q if isinstance(tlv, Update)])
+    bdi.tlv_send_timer()
+
+    # 3.8.1.1: MUST send an update if route exists
+    bdi.process_tlvs(fakea, [RouteReq(**prefix_to_tlv_args(rprefix))])
+    assert not bdin.tlv_q and bdi.tlv_q
+    assert len([tlv for tlv in bdi.tlv_q if isinstance(tlv, Update)])
+    bdi.tlv_send_timer()
+
+    # 3.8.1.1: MUST send an update (retraction) if route does not exist
+    bdi.process_tlvs(fakea, [RouteReq(**prefix_to_tlv_args(fakep))])
+    assert not bdin.tlv_q and bdi.tlv_q
+    assert len([tlv for tlv in bdi.tlv_q if isinstance(tlv, Update)])
+    bdi.tlv_send_timer()
+
+    # 3.8.1.2 MUST send an update if seqno <= expected
+    bdi.process_tlvs(fakea, [SeqnoReq(hopcount=2, rid=fakerid, seqno=121,
+                                      **prefix_to_tlv_args(rprefix))])
+    assert not bdin.tlv_q and bdi.tlv_q
+    assert len([tlv for tlv in bdi.tlv_q if isinstance(tlv, Update)])
+    bdi.tlv_send_timer()
+
+    # 3.8.1.2 MUST NOT increment seqno by more than 1
+    osn = b0.seqno
+    b0p = list(b0.local_routes)[0]
+    bdi.process_tlvs(fakea, [SeqnoReq(hopcount=2, rid=b0.rid, seqno=osn+5,
+                                      **prefix_to_tlv_args(b0p))])
+    assert not bdin.tlv_q and bdi.tlv_q
+    assert len([tlv for tlv in bdi.tlv_q if isinstance(tlv, Update)])
+    assert b0.seqno == osn + 1
+    bdi.tlv_send_timer()
+
+    # 3.8.1.2 SHOULD forward if hopcount>1
+    for n in bdi.neighs.values():
+        if n.tlv_q: n.tlv_send_timer()
+    bdi.process_tlvs(fakea, [SeqnoReq(hopcount=5, rid=fakerid, seqno=124,
+                                      **prefix_to_tlv_args(rprefix))])
+    assert not bdi.tlv_q and not bdin.tlv_q
+    # There has to be some other neighbor..
+    queued_neighs = [n for n in bdi.neighs.values() if n.tlv_q]
+    # MUST NOT be forwarded to a multicast address (duh)
+    # MUST be sent just to single neighbor
+    assert len(queued_neighs) == 1
+    n = queued_neighs[0]
+    l = [tlv for tlv in n.tlv_q if isinstance(tlv, SeqnoReq)]
+    assert l and l[0].hopcount == 4
+    n.tlv_send_timer()
+    # SHOULD maintain list of recently forwarded,
+    # SHOULD compare against recently forwarded
+    bdi.process_tlvs(fakea, [SeqnoReq(hopcount=5, rid=fakerid, seqno=124,
+                                      **prefix_to_tlv_args(rprefix))])
+    for n in bdi.neighs.values():
+        assert not n.tlv_q
+    # or hopcount=1
+    bdi.process_tlvs(fakea, [SeqnoReq(hopcount=1, rid=fakerid, seqno=125,
+                                      **prefix_to_tlv_args(rprefix))])
+    for n in bdi.neighs.values():
+        assert not n.tlv_q
+
+    # 3.8.2.1: MUST send SeqnoReq if all feasible routes gone
+    # (seqno = known seqno + 1)
+    bdi.neighbor(fakea).expire_route_timer(rprefix)
+    l = [tlv for tlv in bdi.tlv_q if isinstance(tlv, SeqnoReq)]
+    assert len(l) == 0
+
+    # still one route left - the original towards b2
+    bdi.neighbor(b1.interface(uiname).ip).expire_route_timer(rprefix)
+    l = [tlv for tlv in bdi.tlv_q if isinstance(tlv, SeqnoReq)]
+    assert len(l) == 1, bdi.tlv_q
+    assert l[0].seqno == b2.seqno + 1
+    bdi.tlv_send_timer()
+
+    # 4: MUST be ignored if SA != linklocal
+    globa = ipaddress.ip_address('2001:db8::1')
+    bdi.process_tlvs(globa, [AckReq(interval=1, nonce=123)])
+    assert globa not in bdi.neighs
+
+    # 4: MUST NOT be sent as jumbograms (...)
+    # TBD (n/a)
+
+    # 4: MUST NOT send packets larger than the attached interface's
+    # MTU
+    # TBD (done but..)
+
+    # 4: MUST be able to receive <= if-MTU packets
+    # TBD (n/a)
+
+    # 4: MUST buffer every TLV
+    # 4: MUST NOT be >= half hello interval
+    # TBD (done but..)
+
+    # encode/decode MUSTs covered in test_codec
+
+def test_rfc6126_should():
+    # TBD - something for the rainy day.. :-p
+
+    # 3.1: 3.8.2 updates SHOULD be sent in timely manner
+    # TBD
+
+    # 3.5.2: M isotonic (m <= m' ==> M(c, m) <= M(c, m')
+    pass
+
 

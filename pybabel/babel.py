@@ -9,8 +9,8 @@
 # Copyright (c) 2015 Markus Stenberg
 #
 # Created:       Wed Mar 25 03:48:40 2015 mstenber
-# Last modified: Fri Mar 27 08:48:15 2015 mstenber
-# Edit time:     472 min
+# Last modified: Fri Mar 27 13:19:31 2015 mstenber
+# Edit time:     492 min
 #
 """
 
@@ -118,7 +118,15 @@ def sort_and_eliminate_tlvs_with_same_rid(tlvs):
             yield tlv
     for rid, l in by_rid.items():
         yield RID(rid=rid)
+        # keep track of updates to send; send only one (the one with
+        # most recent content)
+        updates = {}
         for e in l:
+            if not isinstance(e, Update):
+                yield e
+                continue
+            updates[e.ae, e.body] = e
+        for e in updates.values():
             yield e
 
 def split_tlvs_to_tlv_lists(tlvs):
@@ -308,6 +316,10 @@ class BabelInterface(TLVQueuer):
             self.neighs[ip] = BabelNeighbor(self, ip)
         return self.neighs[ip]
     def process_tlvs(self, address, tlvs):
+        # 4: non-link-local MUST be ignored
+        if not address.is_link_local:
+            _debug('process_inbound - non-link-local %s', address)
+            return
         rid = None
         default_prefix = {}
         default_nh = {2: address}
@@ -417,10 +429,6 @@ class Babel:
             self.ifs[name] = BabelInterface(self, name, ip)
         return self.ifs[name]
     def process_inbound(self, ifname, address, b):
-        # 4: non-link-local MUST be ignored
-        if not address.is_link_local:
-            _debug('process_inbound - non-link-local %s', address)
-            return
         try:
             p = Packet.decode(b)
         except:
@@ -485,7 +493,7 @@ class Babel:
                 self.queue_update(prefix, sr[p], URGENT_JITTER)
 
                 # 3.8.2.1 MUST send seqno request (no feasible routes)
-                self.repeat_queue_seqno_req(p)
+                self.queue_seqno_req_timer(p, sr0[p]['r'], initial=True)
             else:
                 # No longer blackhole
                 self.sys.set_route(blackhole=True, op=OP_DEL, prefix=p)
@@ -496,20 +504,19 @@ class Babel:
         self.selected_routes = sr
         vsr = dict([(k, v) for (k, v) in sr.items() if sr[k]['metric'] < INF])
         self.valid_selected_routes = vsr
-    def repeat_queue_seqno_req(self, p, times=SEQNO_RESEND_TIMES):
-        d = self.selected_routes[p]
+    def queue_seqno_req_timer(self, p, r, times=SEQNO_RESEND_TIMES, initial=False):
         # Ensure route is in blackhole mode
-        if not d or d['metric'] < INF: return
-        tlv = SeqnoReq(seqno=sr[p]['r']['seqno'] + 1,
+        if not initial and p in self.valid_selected_routes: return
+        tlv = SeqnoReq(seqno=r['seqno'] + 1,
                        hopcount=HOP_COUNT,
-                       rid=sr[p]['r']['rid'],
-                       **prefix_to_tlv_args(prefix))
+                       rid=r['rid'],
+                       **prefix_to_tlv_args(p))
         # SHOULD be sent in timely manner
         self.queue_tlv(tlv, URGENT_JITTER)
         if times > 1:
             # resending is a SHOULD
             self.sys.call_later(URGENT_JITTER * 2,
-                                self.repeat_queue_seqno_req, p, times - 1)
+                                self.queue_seqno_req_timer, p, r, times - 1)
     def maintain_feasibility(self, prefix, d):
         # 3.7.3 maintain feasibility distance
         if d['metric'] == INF:
@@ -591,17 +598,17 @@ class Babel:
 
         rid, seqno = d['r']['rid'], d['r']['seqno']
 
-        # first handle option: own rid, too high seqno ->
-        # increment seqno
-        if tlv.seqno > seqno and tlv.rid == self.rid:
-            self.seqno += 1
-            d['r']['seqno'] = self.seqno
-        if rid == self.rid or tlv.seqno <= seqno:
-            # MUST send update if prefix varies or
-            # ' no smaller'
+        # First step: rid different or seqno valid -> send
+        if tlv.rid != rid or tlv.seqno <= seqno:
             self.queue_update_tlv(prefix, d)
-            # (also handle own sending here)
             return
+
+        if tlv.rid == rid and tlv.seqno > seqno:
+            if tlv.rid == self.rid:
+                self.seqno += 1
+                d['r']['seqno'] = self.seqno
+                self.queue_update_tlv(prefix, d)
+                return
 
         # not us, seqno > what we know; forward
 
