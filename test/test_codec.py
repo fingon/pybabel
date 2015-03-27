@@ -9,8 +9,8 @@
 # Copyright (c) 2015 Markus Stenberg
 #
 # Created:       Wed Mar 25 05:23:14 2015 mstenber
-# Last modified: Thu Mar 26 08:44:10 2015 mstenber
-# Edit time:     31 min
+# Last modified: Fri Mar 27 13:34:33 2015 mstenber
+# Edit time:     33 min
 #
 """
 
@@ -58,6 +58,10 @@ def test_tlv_endecode():
             assert v2 == v, '%s - %s != %s' % (k, v, v2)
         assert o0 == o1, '%s != %s' % (o0.__dict__, o1.__dict__)
         assert o0 == o2
+        # Make sure decoder does not choke if we have extra garbage at end too
+        nb = bytes([b[0], b[1]+42]) + b[2:] + bytes(42)
+        o3 = cl.decode(nb)
+        assert o3
 
     # seqno from real Babel
     # fdf6.. = prefix
@@ -79,12 +83,21 @@ def test_prefix():
     p2 = tlv_to_prefix(t)
     assert p == p2
 
+    # Make sure extra body content is ignored
+    t.body = t.body + bytes(42)
+    p2 = tlv_to_prefix(t)
+    assert p == p2
 
 def test_ip_ll():
     for a in [ipaddress.ip_address('fe80::1'),
               ipaddress.ip_address('dead:beef::2'),
               ipaddress.ip_address('1.2.3.4')]:
         t = PadN(**ip_to_tlv_args(a))
+        a2 = tlv_to_ip_or_ll(t)
+        assert a == a2
+
+        # Make sure extra body content is ignored
+        t.body = t.body + bytes(42)
         a2 = tlv_to_ip_or_ll(t)
         assert a == a2
 

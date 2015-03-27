@@ -9,8 +9,8 @@
 # Copyright (c) 2015 Markus Stenberg
 #
 # Created:       Wed Mar 25 05:19:23 2015 mstenber
-# Last modified: Thu Mar 26 08:41:14 2015 mstenber
-# Edit time:     43 min
+# Last modified: Fri Mar 27 13:46:32 2015 mstenber
+# Edit time:     56 min
 #
 """
 
@@ -197,19 +197,28 @@ def prefix_to_tlv_args(prefix):
     return {'ae': isinstance(prefix, ipaddress.IPv4Network) and 1 or 2, 'plen': oplen, 'body': b}
 
 # TLV -> local
+_p_ae2len = {1: 4, 2: 16}
 
 def tlv_to_prefix(tlv):
-    if tlv.ae == 1:
-        b = tlv.body + bytes(4 - len(tlv.body))
+    if tlv.ae not in _p_ae2len: raise ValueError("unsupported af in tlv_to_prefix")
+    el = _p_ae2len[tlv.ae] # expected length
+    if tlv.plen:
+        sl = (tlv.plen + 7)//8
+        if len(tlv.body) < sl: raise ValueError("too short prefix")
+        b = tlv.body[:sl]
     else:
-        if tlv.ae != 2: raise ValueError("unsupported af in tlv_to_prefix")
-        b = tlv.body + bytes(16 - len(tlv.body))
+        b = b''
+    b = b + bytes(el - len(b))
     na = ipaddress.ip_address(b)
     return ipaddress.ip_network('%s/%d' % (na.compressed, tlv.plen))
 
+_ae2len = {1: 4, 2: 16, 3: 8}
 def tlv_to_ip_or_ll(tlv):
+    if tlv.ae not in _ae2len: raise ValueError("unsupported af in tlv_to_ip_or_ll")
+    el = _ae2len[tlv.ae] # expected length
+    b = tlv.body[:el]
     if tlv.ae in [1, 2]:
-        return ipaddress.ip_address(tlv.body)
-    if tlv.ae != 3: raise ValueError("unsupported af in tlv_to_ip_or_ll")
-    b = ipaddress.ip_address('fe80::').packed[:8] + tlv.body
+        return ipaddress.ip_address(b)
+    # just 3 left
+    b = ipaddress.ip_address('fe80::').packed[:8] + b
     return ipaddress.ip_address(b)
