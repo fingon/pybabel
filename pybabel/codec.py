@@ -9,8 +9,8 @@
 # Copyright (c) 2015 Markus Stenberg
 #
 # Created:       Wed Mar 25 05:19:23 2015 mstenber
-# Last modified: Fri Mar 27 22:01:19 2015 mstenber
-# Edit time:     76 min
+# Last modified: Fri Mar 27 22:04:22 2015 mstenber
+# Edit time:     77 min
 #
 """
 
@@ -288,7 +288,6 @@ def compress_update_tlvs(tlvs):
         tlv.flags = tlv.flags | UPDATE_FLAG_SET_DEFAULT_PREFIX
         ae_op[tlv.ae] = p
         yield tlv
-    return tlvs
 
 def split_tlvs_to_packets(tlvs):
     tlvs = eliminate_duplicate_rids(tlvs)
