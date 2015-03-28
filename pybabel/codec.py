@@ -9,8 +9,8 @@
 # Copyright (c) 2015 Markus Stenberg
 #
 # Created:       Wed Mar 25 05:19:23 2015 mstenber
-# Last modified: Fri Mar 27 22:04:22 2015 mstenber
-# Edit time:     77 min
+# Last modified: Fri Mar 27 22:08:51 2015 mstenber
+# Edit time:     79 min
 #
 """
 
@@ -274,8 +274,8 @@ def compress_update_tlvs(tlvs):
     # choice is simply to _always_ set the 80 bit, and use that to
     # determine the omitted part for subsequent TLVs.
 
-    # This is done in-place, as TLVs are not used after this except to
-    # be sent on the wire.
+    # This cannot be done in-place, as the same Update TLV may be
+    # queued on multiple interfaces.
     ae_op = {1: b'', 2: b''}
     for tlv in tlvs:
         if not isinstance(tlv, Update):
