@@ -9,8 +9,8 @@
 # Copyright (c) 2015 Markus Stenberg
 #
 # Created:       Wed Mar 25 03:48:40 2015 mstenber
-# Last modified: Fri Mar 27 13:19:31 2015 mstenber
-# Edit time:     492 min
+# Last modified: Fri Mar 27 21:53:01 2015 mstenber
+# Edit time:     541 min
 #
 """
 
@@ -45,7 +45,6 @@ RECENT_HELLO_MULTIPLIER = 4.5 # mentioned in RFC6216?
 URGENT_JITTER = 0.2
 HOP_COUNT = 127
 MY_METRIC = 256 # what it costs to visit us; no real metric calc here!
-MTU_ISH = 1400 # random MTU we use for splitting TLVs when we send stuff
 SEQNO_RESEND_TIMES = 3
 
 INF = 0xFFFF
@@ -77,6 +76,7 @@ class TLVQueuer:
     tlv_timeout = None
     def queue_tlv(self, tlv, j=HELLO_INTERVAL / 2):
         _debug('%s queue_tlv %s %s', self, tlv, j)
+        assert not isinstance(tlv, Update) or not tlv.omitted
         if self.tlv_q is None: self.tlv_q = []
         sys = self.get_sys()
         now = sys.time()
@@ -101,55 +101,6 @@ class TLVQueuer:
         raise NotImplementedError # child responsibility
     def get_sys(self):
         raise NotImplementedError
-
-def sort_and_eliminate_tlvs_with_same_rid(tlvs):
-    # Note: this is not really generic; instead, we _know_ we have RID
-    # before every TLV that needs one..
-    rid = None
-    by_rid = collections.defaultdict(list)
-    for tlv in tlvs:
-        if isinstance(tlv, RID):
-            rid = tlv.rid
-        elif rid:
-            by_rid[rid].append(tlv)
-            rid = None
-        else:
-            assert not isinstance(tlv, Update) # Updates must have RID
-            yield tlv
-    for rid, l in by_rid.items():
-        yield RID(rid=rid)
-        # keep track of updates to send; send only one (the one with
-        # most recent content)
-        updates = {}
-        for e in l:
-            if not isinstance(e, Update):
-                yield e
-                continue
-            updates[e.ae, e.body] = e
-        for e in updates.values():
-            yield e
-
-def split_tlvs_to_tlv_lists(tlvs):
-    c = 4 # packet header
-    l = []
-    # TBD: could do clever things to Update TLVs here but out of scope
-    # (address compression)
-    for tlv in tlvs:
-        tl = len(tlv.encode())
-        if tl + c > MTU_ISH:
-            yield l
-            c = 4
-            l = []
-        c += tl
-        l.append(tlv)
-    if l:
-        yield l
-
-def split_tlvs_to_packets(tlvs):
-    tlvs = sort_and_eliminate_tlvs_with_same_rid(tlvs)
-    # SHOULD maximize size, but MUST NOT send larger than ..
-    for tlvs in split_tlvs_to_tlv_lists(tlvs):
-        yield Packet(tlvs=tlvs).encode()
 
 class BabelNeighbor(TLVQueuer):
     " A neighbor on BabelInterface "
@@ -333,20 +284,6 @@ class BabelInterface(TLVQueuer):
                 self.neighbor(address).process_ihu(tlv)
             elif isinstance(tlv, Update):
                 af = tlv.ae == 3 and 2 or tlv.ae
-                if tlv.flags & 0x40:
-                    if af:
-                        rid = tlv.body[-8:]
-                        if len(rid) != RID_LEN:
-                            _error('broken implicit rid:%s' % tlv)
-                            return
-                    else:
-                        # TBD - reference implementation sends
-                        # AE=0, metric=INF - how do you take last 8
-                        # bytes for rid out of that?
-
-                        # _assume_ it is just wanting to use end of address
-                        rid = address.packed[-RID_LEN:]
-                        assert len(rid) == RID_LEN
                 if af:
                     tlvfull = tlv.omitted and PrefixTLVTuple(ae=tlv.ae, plen=tlv.plen, body=default_prefix.get(af, b'')[:tlv.omitted] + tlv.body) or tlv
                     # MUST ignore invalid AE
@@ -355,8 +292,24 @@ class BabelInterface(TLVQueuer):
                     except ValueError:
                         _error('invalid prefix in update request %s (%s)', tlvfull, tlv)
                         continue
-                    if tlv.flags & 0x80:
-                        default_prefix[af] = prefix.network_address.packed
+                else:
+                    prefix = None
+                if tlv.flags & UPDATE_FLAG_SET_DEFAULT_RID:
+                    if af:
+                        rid = prefix.address.packed[-RID_LEN:]
+                        if len(rid) != RID_LEN:
+                            _error('broken implicit rid:%s' % tlv)
+                            return
+                    else:
+                        # TBD - reference implementation sends
+                        # AE=0, metric=INF - how do you take last 8
+                        # bytes for rid out of that?
+
+                        # ignore it for now..
+                        rid = None
+                if tlv.flags & UPDATE_FLAG_SET_DEFAULT_PREFIX:
+                    default_prefix[af] = prefix.network_address.packed
+                if af:
                     nh = default_nh.get(af, address)
                     self.neighbor(address).process_update(tlv, rid, prefix, nh)
                 else:
@@ -547,7 +500,8 @@ class Babel:
         # system-wide update timer.
 
         # 3.7.1
-        for prefix, d in self.valid_selected_routes.items():
+        for prefix, d in sorted(self.valid_selected_routes.items(),
+                                key=lambda x:(x[1]['r']['rid'], x[0])):
             self.queue_update(prefix, d)
         self.sys.call_later(UPDATE_INTERVAL, self.update_timer)
         self.recently_forwarded_seqnoreq_set = set()
@@ -561,11 +515,8 @@ class Babel:
         rid = d['r']['rid']
         assert len(rid) == RID_LEN, 'broken d:%s for %s' % (d, prefix)
         self.queue_tlv(RID(rid=rid))
-        flags = 0
-        omitted = 0
-        interval = UPDATE_INTERVAL
         r = d.get('r', {})
-        u = Update(flags=flags, omitted=omitted, interval=_t2b(interval),
+        u = Update(flags=0, omitted=0, interval=_t2b(UPDATE_INTERVAL),
                    seqno=r.get('seqno', 0), metric=d['metric'],
                    **prefix_to_tlv_args(prefix))
         self.queue_tlv(u, *a)

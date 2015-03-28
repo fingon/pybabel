@@ -9,8 +9,8 @@
 # Copyright (c) 2015 Markus Stenberg
 #
 # Created:       Wed Mar 25 05:19:23 2015 mstenber
-# Last modified: Fri Mar 27 13:46:32 2015 mstenber
-# Edit time:     56 min
+# Last modified: Fri Mar 27 22:01:19 2015 mstenber
+# Edit time:     76 min
 #
 """
 
@@ -23,6 +23,10 @@ import struct
 import ipaddress
 
 RID_LEN = 8
+MTU_ISH = 1400 # random MTU we use for splitting TLVs when we send stuff
+
+UPDATE_FLAG_SET_DEFAULT_PREFIX=0x80
+UPDATE_FLAG_SET_DEFAULT_RID=0x40
 
 class EqMixin:
     def __eq__(self, o):
@@ -53,6 +57,8 @@ class CStruct(Blob):
     def __repr__(self):
         return '%s(%s)' % (self.__class__.__name__,
                            ', '.join(['%s=%s' % (k, v) for k, v in self.__dict__.items() if k in self.keys or k in self.arkeys]))
+    def copy(self):
+        return self.__class__(**self.__dict__)
     def get_format(self):
         # We store this in __class__ instead of self (ugly but fast)
         if '_fmt' not in self.__class__.__dict__:
@@ -70,6 +76,9 @@ class CStruct(Blob):
     def size(self):
         return self.get_format().size
 
+def _decode_error(desc, x):
+    raise ValueError('%s in %s' % (desc, x))
+
 class Packet(CStruct):
     format = '>BBH'
     keys = ['magic', 'version', 'length']
@@ -78,8 +87,8 @@ class Packet(CStruct):
     tlvs = []
     def decode_buffer(self, x):
         CStruct.decode_buffer(self, x)
-        if self.magic != Packet.magic: raise ValueError("wrong magic")
-        if self.version != Packet.version: raise ValueError("wrong version")
+        if self.magic != Packet.magic: _decode_error("wrong magic", self)
+        if self.version != Packet.version: _decode_error("wrong version", self)
         self.tlvs = list(decode_tlvs(x[self.size():self.size()+self.length]))
     def encode(self):
         s = b''.join([x.encode() for x in self.tlvs])
@@ -177,7 +186,7 @@ def decode_tlvs(x):
         i += tlv.size() + tlv.l
 
 # Conversion of addresses:
-# local -> local
+# local -> TLV
 
 def ip_to_tlv_args(ip):
     if ip.is_link_local:
@@ -187,7 +196,7 @@ def ip_to_tlv_args(ip):
 
 def ll_to_tlv_args(ip):
     b = ip.packed[8:]
-    if not b: raise ValueError("non-IPV4 address in ll_to_tlv_args")
+    if not b: _decode_error("non-IPV4 address in ll_to_tlv_args", ip)
     return {'ae': 3, 'body': b}
 
 def prefix_to_tlv_args(prefix):
@@ -200,11 +209,11 @@ def prefix_to_tlv_args(prefix):
 _p_ae2len = {1: 4, 2: 16}
 
 def tlv_to_prefix(tlv):
-    if tlv.ae not in _p_ae2len: raise ValueError("unsupported af in tlv_to_prefix")
+    if tlv.ae not in _p_ae2len: _decode_error("unsupported af in tlv_to_prefix", tlv)
     el = _p_ae2len[tlv.ae] # expected length
     if tlv.plen:
         sl = (tlv.plen + 7)//8
-        if len(tlv.body) < sl: raise ValueError("too short prefix")
+        if len(tlv.body) < sl: _decode_error("too short prefix", tlv)
         b = tlv.body[:sl]
     else:
         b = b''
@@ -214,7 +223,7 @@ def tlv_to_prefix(tlv):
 
 _ae2len = {1: 4, 2: 16, 3: 8}
 def tlv_to_ip_or_ll(tlv):
-    if tlv.ae not in _ae2len: raise ValueError("unsupported af in tlv_to_ip_or_ll")
+    if tlv.ae not in _ae2len: _decode_error("unsupported af in tlv_to_ip_or_ll", tlv)
     el = _ae2len[tlv.ae] # expected length
     b = tlv.body[:el]
     if tlv.ae in [1, 2]:
@@ -222,3 +231,67 @@ def tlv_to_ip_or_ll(tlv):
     # just 3 left
     b = ipaddress.ip_address('fe80::').packed[:8] + b
     return ipaddress.ip_address(b)
+
+# TLV list handling
+
+def eliminate_duplicate_rids(tlvs):
+    rid = None
+    for tlv in tlvs:
+        if isinstance(tlv, RID):
+            if rid == tlv.rid:
+                continue
+            rid = tlv.rid
+            yield tlv
+            continue
+        yield tlv
+
+def split_tlvs_to_tlv_lists(tlvs):
+    c = 4 # packet header
+    l = []
+    rid = None
+    for tlv in tlvs:
+        if isinstance(tlv, RID):
+            rid = tlv
+        tl = len(tlv.encode())
+        if tl + c > MTU_ISH:
+            yield l
+            c = 4
+            l = []
+            if rid and not isinstance(tlv, RID):
+                c += tlv.size() + 2
+                l.append(rid)
+        c += tl
+        l.append(tlv)
+    if l:
+        yield l
+
+def _shared_substring_len(p1, p2):
+    if not p1 or not p2: return 0
+    return max([x for x in range(len(p1)) if p1[:x] == p2[:x]])
+
+def compress_update_tlvs(tlvs):
+    # As TLVs are sorted by default (in the bulk send case), simple
+    # choice is simply to _always_ set the 80 bit, and use that to
+    # determine the omitted part for subsequent TLVs.
+
+    # This is done in-place, as TLVs are not used after this except to
+    # be sent on the wire.
+    ae_op = {1: b'', 2: b''}
+    for tlv in tlvs:
+        if not isinstance(tlv, Update):
+            yield tlv
+            continue
+        tlv = tlv.copy()
+        p = tlv.body
+        tlv.omitted = _shared_substring_len(ae_op[tlv.ae], p)
+        if tlv.omitted: tlv.body = p[tlv.omitted:]
+        tlv.flags = tlv.flags | UPDATE_FLAG_SET_DEFAULT_PREFIX
+        ae_op[tlv.ae] = p
+        yield tlv
+    return tlvs
+
+def split_tlvs_to_packets(tlvs):
+    tlvs = eliminate_duplicate_rids(tlvs)
+    # SHOULD maximize size, but MUST NOT send larger than ..
+    for tlvs in split_tlvs_to_tlv_lists(tlvs):
+        yield Packet(tlvs=compress_update_tlvs(tlvs)).encode()

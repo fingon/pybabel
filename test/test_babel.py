@@ -9,8 +9,8 @@
 # Copyright (c) 2015 Markus Stenberg
 #
 # Created:       Wed Mar 25 10:46:15 2015 mstenber
-# Last modified: Fri Mar 27 13:25:40 2015 mstenber
-# Edit time:     156 min
+# Last modified: Fri Mar 27 21:42:12 2015 mstenber
+# Edit time:     163 min
 #
 """
 
@@ -24,6 +24,7 @@ topology connections to be made (and unmade) over time.
 """
 
 from pybabel.babel import *
+import pybabel.codec
 import collections
 import random
 
@@ -32,6 +33,8 @@ _logger = logging.getLogger(__name__)
 _debug = _logger.debug
 
 DELIVERY_DELAY_MAX=0.2
+
+orig_decode_error = pybabel.codec._decode_error
 
 class FakeTimeout:
     done = False
@@ -42,6 +45,11 @@ class FakeTimeout:
         self.cb = cb
         self.a = a
         _debug('%s FakeTimeout %s', self, cb)
+        def _f(desc, x):
+            assert False, 'decode error:%s in %s' % (desc, x)
+        pybabel.codec._decode_error = _f
+    def __del__(self):
+        pybabel.codec._decode_error = orig_decode_error
     def cancel(self):
         assert not self.done
         assert self in self.fs.timeouts
@@ -263,7 +271,7 @@ def _test_babel_tree(n, brf, ifc):
         # Add one local route to each node
         prefix = ipaddress.ip_network('2001:db8:%d::/48' % i)
         b.local_routes.add(prefix)
-    fs.run_until(fs.converged, max_iterations=10000)
+    fs.run_until(fs.converged, max_iterations=1000)
     assert fs.routes_are_sane()
     return fs
 
