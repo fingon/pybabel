@@ -9,8 +9,8 @@
 # Copyright (c) 2015 Markus Stenberg
 #
 # Created:       Wed Mar 25 10:46:15 2015 mstenber
-# Last modified: Fri Mar 27 21:42:12 2015 mstenber
-# Edit time:     163 min
+# Last modified: Mon Mar 30 12:25:18 2015 mstenber
+# Edit time:     193 min
 #
 """
 
@@ -285,18 +285,20 @@ def _test_babel_tree_big():
     _test_babel_tree(13, 5, 3)
 
 
+fakea = ipaddress.ip_address('fe80::1')
+fakea2 = ipaddress.ip_address('fe80::2')
+uiname = 'up'
+diname = 'down0'
+
 def test_rfc6126_must():
     fs = _test_babel_tree(3, 2, 1)
     (b0, b1, b2) = fs.babels
-    uiname = 'up'
-    diname = 'down0'
     fakep = ipaddress.ip_network('dead:beef::/32')
 
     # 3.1: Ack TLV MUST be sent <= deadline
     # 3.3: MUST be able to respond to AckReq (.. with Ack)
     # 3.3: Ack MUST be sent to a unicast destination
-    fakea = ipaddress.ip_address('fe80::1')
-    fakea2 = ipaddress.ip_address('fe80::2')
+    bui = b0.interface(uiname)
     bdi = b0.interface(diname)
     bdi.process_tlvs(fakea, [AckReq(interval=1, nonce=123)])
     bdin = bdi.neighbor(fakea)
@@ -329,8 +331,12 @@ def test_rfc6126_must():
                              Update(flags=0, omitted=0, interval=1, seqno=123,
                                     metric=1, **prefix_to_tlv_args(rprefix))])
     assert bdi.tlv_q and bdi.tlv_t <= fs.t + URGENT_JITTER
+    # 3.7.2: SHOULD make sure it is received by everyone (2/5 sends)
+    # (= >1 resend; one already in queue, another in timer)
     assert len([tlv for tlv in bdi.tlv_q if isinstance(tlv, Update)])
     bdi.tlv_send_timer()
+
+    assert [t for t in fs.timeouts if t.cb == b0.queue_update_timer]
 
     # 3.8.1.1: MUST send an update if route exists
     bdi.process_tlvs(fakea, [RouteReq(**prefix_to_tlv_args(rprefix))])
@@ -364,15 +370,16 @@ def test_rfc6126_must():
     # 3.8.1.2 SHOULD forward if hopcount>1
     for n in bdi.neighs.values():
         if n.tlv_q: n.tlv_send_timer()
-    bdi.process_tlvs(fakea, [SeqnoReq(hopcount=5, rid=fakerid, seqno=124,
-                                      **prefix_to_tlv_args(rprefix))])
-    assert not bdi.tlv_q and not bdin.tlv_q
-    # There has to be some other neighbor..
+    bdi.process_tlvs(fakea2, [SeqnoReq(hopcount=5, rid=fakerid, seqno=124,
+                                       **prefix_to_tlv_args(rprefix))])
+    assert not bdi.tlv_q
+    # There has to be bdin but no other neighbor..
     queued_neighs = [n for n in bdi.neighs.values() if n.tlv_q]
     # MUST NOT be forwarded to a multicast address (duh)
     # MUST be sent just to single neighbor
     assert len(queued_neighs) == 1
     n = queued_neighs[0]
+    assert bdin == n
     l = [tlv for tlv in n.tlv_q if isinstance(tlv, SeqnoReq)]
     assert l and l[0].hopcount == 4
     n.tlv_send_timer()
@@ -399,6 +406,13 @@ def test_rfc6126_must():
     l = [tlv for tlv in bdi.tlv_q if isinstance(tlv, SeqnoReq)]
     assert len(l) == 1, bdi.tlv_q
     assert l[0].seqno == b2.seqno + 1
+
+    # SHOULD be sent on all interfaces
+    l = [tlv for tlv in bui.tlv_q if isinstance(tlv, SeqnoReq)]
+    assert len(l) >= 1, bui.tlv_q
+    assert l[-1].seqno == b2.seqno + 1
+
+
     bdi.tlv_send_timer()
 
     # 4: MUST be ignored if SA != linklocal
@@ -423,12 +437,60 @@ def test_rfc6126_must():
     # encode/decode MUSTs covered in test_codec
 
 def test_rfc6126_should():
+    fs = _test_babel_tree(3, 2, 1)
+    (b0, b1, b2) = fs.babels
+    bui = b0.interface(uiname)
+    bdi = b0.interface(diname)
+
+    _debug('test_rfc6126_should setup done')
+
     # TBD - something for the rainy day.. :-p
 
+    # 3.1: outgoing TLVs SHOULD be sent with a delay
     # 3.1: 3.8.2 updates SHOULD be sent in timely manner
-    # TBD
+    # TBD (done but..)
+
+    # 3.2.1: node SHOULD NOT increment seqno spontaneously (check)
+
+    # 3.4.1: hello interval SHOULD NOT be increased except before
+    # sending a Hello packet.
+    # 3.4.1: if changing interval, node SHOULD send an unscheduled Hello
+    # TBD (n/a; we do not change the interval)
 
     # 3.5.2: M isotonic (m <= m' ==> M(c, m) <= M(c, m')
-    pass
+
+    # 3.7.2: SHOULD NOT send triggered update for other reasons
+    # TBD (n/a, proving negative is hard)
+
+    # 3.7.4: SHOULD use split horizon
+    # SHOULD NOT be applied to an interface unless known to be
+    # symmetric+transitive
+    # TBD _NOT implemented_
+
+    # 3.8.1.1: wildcard -> SHOULD send full dump
+    # TBD (done but ..)
+
+    # 3.8.2.1: SHOULD send seqno-req > 1 times
+    # TBD (done but ..)
+
+    # 3.8.2.2: on non-feasible update, SHOULD send unicast seqno req
+
+    # Feasibility updates is done only periodically when sending updates;
+    # force it first
+    b0.update_timer()
+
+    bdin = bdi.neighbor(fakea)
+
+    b1ip = b1.interface(uiname).ip
+    assert not bdi.neighbor(b1ip).tlv_q
+    rprefix = list(b2.local_routes)[0]
+    seqno = bdi.neighbor(b1ip).routes[rprefix]['seqno']
+    bdi.process_tlvs(b1ip,
+                     [RID(rid=b2.rid),
+                      Update(flags=0, omitted=0, interval=1, seqno=seqno,
+                             metric=12345, **prefix_to_tlv_args(rprefix))])
+    assert bdi.neighbor(b1ip).tlv_q
+
+    # 3.8.2.3: SHOULD send unicast route req 'shortly' before expiration
 
 
