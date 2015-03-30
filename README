@@ -1,14 +1,22 @@
-This is minimalist proof-of-concept implementation of Babel (RFC6126).
+This is a minimalist implementation of Babel (RFC6126).
 
 It is written in Python 3.4(+), uses normal Python socket API, and
-Linux "ip" command to interact with the rest of the system. 
+Linux "ip" command to interact with the rest of the system.
 
 If you ever think to use this for production use, don't!
 
 Intentional limitations:
+
 - IPv6 only (legacy IP? what's that?)
+
 - no real cost calculation
-- no media specific handling
+
+- lack of media specific handling
+ - most values assume reasonable lossless connection, _but_
+ - no split horizon
+
+- no support for other drafts (yet..?)
+ - RFC7298 (Babel HMAC) would be nice to support at some point?)
 
 For real implementation and much more information about the protocol,
 please see:
