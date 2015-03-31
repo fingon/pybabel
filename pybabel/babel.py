@@ -9,8 +9,8 @@
 # Copyright (c) 2015 Markus Stenberg
 #
 # Created:       Wed Mar 25 03:48:40 2015 mstenber
-# Last modified: Tue Mar 31 16:20:24 2015 mstenber
-# Edit time:     614 min
+# Last modified: Tue Mar 31 18:10:56 2015 mstenber
+# Edit time:     616 min
 #
 """
 
@@ -394,6 +394,7 @@ class Babel:
 
         # SHOULD be mod-EUI64; hopefully system provides that
         self.rid = sys.get_rid()
+        assert len(self.rid) == RID_LEN
 
         self.seqno = 0
 
