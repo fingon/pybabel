@@ -9,8 +9,8 @@
 # Copyright (c) 2015 Markus Stenberg
 #
 # Created:       Wed Mar 25 10:46:15 2015 mstenber
-# Last modified: Tue Mar 31 16:21:44 2015 mstenber
-# Edit time:     197 min
+# Last modified: Tue Mar 31 21:01:00 2015 mstenber
+# Edit time:     202 min
 #
 """
 
@@ -505,3 +505,20 @@ def test_update_flag_40():
     assert i.neighbor(fakea).routes[fakep]['rid'] == fakerid
 
 
+def test_github_issue_4():
+    fs = FakeSystem()
+    b = fs.add_babel()
+    i = b.interface('x')
+    fakep = ipaddress.ip_network('dead:beef:1:2:3:4:5:6/128')
+    fake_ihu_interval = 100
+
+    tlvs = [Hello(seqno=123, interval=fake_ihu_interval),
+            IHU(rxcost=1, interval=fake_ihu_interval, **ll_to_tlv_args(i.ip))]
+    i.process_tlvs(fakea, tlvs)
+
+    # The issue was that _after_ the IHU had timed out (no message
+    # within interval), receiving another IHU caused a boom. So wait a bit.
+    et = fs.t + fake_ihu_interval * IHU_HOLD_TIME_MULTIPLIER * 3 / 2
+    fs.run_until(lambda :fs.t >= et, max_iterations=1000)
+
+    i.process_tlvs(fakea, tlvs)

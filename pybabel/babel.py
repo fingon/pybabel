@@ -9,8 +9,8 @@
 # Copyright (c) 2015 Markus Stenberg
 #
 # Created:       Wed Mar 25 03:48:40 2015 mstenber
-# Last modified: Tue Mar 31 18:10:56 2015 mstenber
-# Edit time:     616 min
+# Last modified: Tue Mar 31 21:01:26 2015 mstenber
+# Edit time:     623 min
 #
 """
 
@@ -147,6 +147,7 @@ class BabelNeighbor(TLVQueuer):
         self.ihu_timer = self.get_sys().call_later(dt, self.ihu_expired_timer)
     def ihu_expired_timer(self):
         self.update_transmission_cost(INF)
+        del self.ihu_timer
     def update_transmission_cost(self, v):
         if self.transmission_cost == v:
             return
