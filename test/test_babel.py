@@ -9,8 +9,8 @@
 # Copyright (c) 2015 Markus Stenberg
 #
 # Created:       Wed Mar 25 10:46:15 2015 mstenber
-# Last modified: Mon Mar 30 12:25:18 2015 mstenber
-# Edit time:     193 min
+# Last modified: Tue Mar 31 16:21:44 2015 mstenber
+# Edit time:     197 min
 #
 """
 
@@ -492,5 +492,16 @@ def test_rfc6126_should():
     assert bdi.neighbor(b1ip).tlv_q
 
     # 3.8.2.3: SHOULD send unicast route req 'shortly' before expiration
+
+def test_update_flag_40():
+    fs = FakeSystem()
+    b = fs.add_babel()
+    i = b.interface('x')
+    fakep = ipaddress.ip_network('dead:beef:1:2:3:4:5:6/128')
+    i.process_tlvs(fakea,
+                   [Update(flags=0x40, omitted=0, interval=1, seqno=0,
+                           metric=1, **prefix_to_tlv_args(fakep))])
+    fakerid = bytes([0, 3, 0, 4, 0, 5, 0, 6])
+    assert i.neighbor(fakea).routes[fakep]['rid'] == fakerid
 
 

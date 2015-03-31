@@ -9,7 +9,7 @@
 # Copyright (c) 2015 Markus Stenberg
 #
 # Created:       Wed Mar 25 03:48:40 2015 mstenber
-# Last modified: Mon Mar 30 12:23:23 2015 mstenber
+# Last modified: Tue Mar 31 16:20:24 2015 mstenber
 # Edit time:     614 min
 #
 """
@@ -317,7 +317,7 @@ class BabelInterface(TLVQueuer):
                     p = None
                 if tlv.flags & UPDATE_FLAG_SET_DEFAULT_RID:
                     if af:
-                        rid = prefix.address.packed[-RID_LEN:]
+                        rid = p.network_address.packed[-RID_LEN:]
                         if len(rid) != RID_LEN:
                             _error('broken implicit rid:%s' % tlv)
                             return
