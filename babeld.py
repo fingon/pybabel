@@ -9,8 +9,8 @@
 # Copyright (c) 2015 Markus Stenberg
 #
 # Created:       Wed Mar 25 21:53:19 2015 mstenber
-# Last modified: Thu Mar 26 17:08:26 2015 mstenber
-# Edit time:     176 min
+# Last modified: Tue Mar 31 18:12:35 2015 mstenber
+# Edit time:     180 min
 #
 """
 
@@ -18,7 +18,7 @@ Leveraging the pybabel module, minimalist routing daemon.
 
 """
 
-from pybabel.babel import SystemInterface, Babel, OP_ADD, OP_DEL
+from pybabel.babel import SystemInterface, Babel, OP_ADD, OP_DEL, RID_LEN
 
 import time
 import random
@@ -102,9 +102,10 @@ class LinuxSystemInterface(SystemInterface):
     def get_rid(self):
         l = list(os.popen('ip link | grep link/ether').readlines())
         if not l:
-            return bytes(range(RID_LEN))
+            return bytes([random.randint(0, 255) for x in range(RID_LEN)])
         d = l[0].strip().split(' ')[1]
         b = bytes([int(x, 16) for x in d.split(':')])
+        if len(b) < RID_LEN: b = bytes(RID_LEN-len(b)) + b
         return b
     def get_if_ip(self, ifname):
         l = list(os.popen('ip -6 addr show dev %s | grep "scope link"' % ifname))
@@ -113,11 +114,11 @@ class LinuxSystemInterface(SystemInterface):
     def send_multicast(self, ifname, b):
         self.send_unicast(ifname, BABEL_GROUP, b)
     def send_unicast(self, ifname, ip, b):
+        if isinstance(ip, ipaddress.IPv6Address): ip = ip.compressed
+        if isinstance(ip, ipaddress.IPv4Address): return # no v4!
         _debug('send_unicast %s%%%s %d bytes' % (ip, ifname, len(b)))
-        #a = '%s%%%s' % (ip, ifname)
-        a = ip
         ifindex = socket.if_nametoindex(ifname)
-        babel.interface(ifname).s.sendto(b, (a, BABEL_PORT, 0, ifindex))
+        babel.interface(ifname).s.sendto(b, (ip, BABEL_PORT, 0, ifindex))
     def set_route(self, op, prefix, blackhole=False, ifname=None, nh=None):
         af = isinstance(prefix, ipaddress.IPv4Network) and "-4" or "-6"
         if blackhole:
