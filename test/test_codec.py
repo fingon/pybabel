@@ -9,8 +9,8 @@
 # Copyright (c) 2015 Markus Stenberg
 #
 # Created:       Wed Mar 25 05:23:14 2015 mstenber
-# Last modified: Fri Mar 27 21:54:29 2015 mstenber
-# Edit time:     43 min
+# Last modified: Thu Apr  2 10:43:38 2015 mstenber
+# Edit time:     47 min
 #
 """
 
@@ -34,6 +34,7 @@ def test_repr():
 
 def test_tlv_endecode():
     for cl, a in [
+        (Pad1, {}),
         (PadN, {'body': b'12'}),
         (AckReq, {'nonce': 123, 'interval': 234}),
         (Ack, {'nonce': 123}),
@@ -46,6 +47,7 @@ def test_tlv_endecode():
         (RouteReq, {'ae': 2, 'plen': 3}),
         (SeqnoReq, {'ae': 2, 'plen': 3, 'seqno': 2345, 'hopcount': 3,
                     'rid': b'12345678'}),
+        (BodyTLV, {'t': 123, 'body': b'1234'}),
         ]:
         o0 = cl(**a)
         b = o0.encode()
@@ -58,10 +60,12 @@ def test_tlv_endecode():
             assert v2 == v, '%s - %s != %s' % (k, v, v2)
         assert o0 == o1, '%s != %s' % (o0.__dict__, o1.__dict__)
         assert o0 == o2
-        # Make sure decoder does not choke if we have extra garbage at end too
-        nb = bytes([b[0], b[1]+42]) + b[2:] + bytes(42)
-        o3 = cl.decode(nb)
-        assert o3
+        if b[0]:
+            # Make sure decoder does not choke if we have extra
+            # garbage at end too
+            nb = bytes([b[0], b[1]+42]) + b[2:] + bytes(42)
+            o3 = cl.decode(nb)
+            assert o3
 
     # seqno from real Babel
     # fdf6.. = prefix
@@ -74,6 +78,11 @@ def test_tlv_endecode():
 
 def test_prefix():
     p = ipaddress.ip_network('fe80::/64')
+    t = PadN(**prefix_to_tlv_args(p))
+    p2 = tlv_to_prefix(t)
+    assert p == p2
+
+    p = ipaddress.ip_network('::/0')
     t = PadN(**prefix_to_tlv_args(p))
     p2 = tlv_to_prefix(t)
     assert p == p2
@@ -128,7 +137,7 @@ def test_compression():
 def test_long():
     r = RID(rid=b'')
     u = Update(ae=0, omitted=0, flags=0, plen=0, interval=0, seqno=0, metric=0)
-    ll = split_tlvs_to_tlv_lists([r] + [u] * int(MTU_ISH * 3 / 2 / (u.size() + 2)))
+    ll = split_tlvs_to_tlv_lists([r] + [u] * int(MTU_ISH * 3 / 2 / (u.wire_size() + 2)))
     ll = list(ll)
     assert len(ll) == 2
     (l1, l2) = ll

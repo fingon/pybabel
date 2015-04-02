@@ -9,8 +9,8 @@
 # Copyright (c) 2015 Markus Stenberg
 #
 # Created:       Wed Mar 25 05:19:23 2015 mstenber
-# Last modified: Fri Mar 27 22:08:51 2015 mstenber
-# Edit time:     79 min
+# Last modified: Thu Apr  2 10:42:10 2015 mstenber
+# Edit time:     92 min
 #
 """
 
@@ -73,7 +73,7 @@ class CStruct(Blob):
             if hasattr(self, k) and getattr(self, k) == v:
                 continue
             setattr(self, k, v)
-    def size(self):
+    def format_size(self):
         return self.get_format().size
 
 def _decode_error(desc, x):
@@ -89,7 +89,7 @@ class Packet(CStruct):
         CStruct.decode_buffer(self, x)
         if self.magic != Packet.magic: _decode_error("wrong magic", self)
         if self.version != Packet.version: _decode_error("wrong version", self)
-        self.tlvs = list(decode_tlvs(x[self.size():self.size()+self.length]))
+        self.tlvs = list(decode_tlvs(x[self.format_size():self.format_size()+self.length]))
     def encode(self):
         s = b''.join([x.encode() for x in self.tlvs])
         self.length = len(s)
@@ -98,8 +98,10 @@ class Packet(CStruct):
 class TLV(CStruct):
     format = '>BB'
     keys = ['t', 'l']
+    def wire_size(self):
+        return self.format_size()
     def encode(self):
-        self.l = self.size() - 2
+        self.l = self.wire_size() - 2
         return CStruct.encode(self)
 
 class BodyTLV(TLV):
@@ -107,14 +109,24 @@ class BodyTLV(TLV):
     body = b''
     def decode_buffer(self, x, ofs=0):
         TLV.decode_buffer(self, x, ofs)
-        bofs = ofs + self.size()
-        blen = self.l - self.size() + 2
+        bofs = ofs + self.format_size()
+        blen = self.l - self.format_size() + 2
         b = x[bofs:bofs+blen]
         if b != self.body:
             self.body = b
+    def wire_size(self):
+        return TLV.wire_size(self) + len(self.body)
     def encode(self):
-        self.l = self.size() - 2 + len(self.body)
-        return CStruct.encode(self) + self.body
+        return TLV.encode(self) + self.body
+
+class Pad1(Blob):
+    t = 0
+    def encode(self):
+        return bytes([0])
+    def decode_buffer(self, x, ofs=0):
+        pass
+    def wire_size(self):
+        return 1
 
 class PadN(BodyTLV):
     t = 1
@@ -170,20 +182,16 @@ class SeqnoReq(BodyTLV):
     keys = TLV.keys[:] + ['ae', 'plen', 'seqno', 'hopcount', 'reserved', 'rid']
     reserved = 0
 
-_tlvlist = [PadN, AckReq, Ack, Hello, IHU, RID, NH, Update, RouteReq, SeqnoReq]
+_tlvlist = [Pad1, PadN, AckReq, Ack, Hello, IHU, RID, NH, Update, RouteReq, SeqnoReq]
 _tlvs = dict([(t.t, t) for t in _tlvlist])
 
 def decode_tlvs(x):
     i = 0
-    while (i + 2) <= len(x):
-        if x[i] == chr(0):
-            # pad1
-            i += 1
-            continue
-        tlv = TLV.decode(x, i)
-        if tlv.t in _tlvs:
-            yield _tlvs[tlv.t].decode(x, i)
-        i += tlv.size() + tlv.l
+    while i < len(x):
+        t = x[i]
+        tlv = _tlvs.get(t, BodyTLV).decode(x, i)
+        yield tlv
+        i += tlv.wire_size()
 
 # Conversion of addresses:
 # local -> TLV
@@ -258,7 +266,7 @@ def split_tlvs_to_tlv_lists(tlvs):
             c = 4
             l = []
             if rid and not isinstance(tlv, RID):
-                c += tlv.size() + 2
+                c += tlv.wire_size()
                 l.append(rid)
         c += tl
         l.append(tlv)
