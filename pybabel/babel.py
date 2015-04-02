@@ -9,8 +9,8 @@
 # Copyright (c) 2015 Markus Stenberg
 #
 # Created:       Wed Mar 25 03:48:40 2015 mstenber
-# Last modified: Tue Mar 31 21:01:26 2015 mstenber
-# Edit time:     623 min
+# Last modified: Thu Apr  2 10:19:53 2015 mstenber
+# Edit time:     629 min
 #
 """
 
@@ -180,11 +180,9 @@ class BabelNeighbor(TLVQueuer):
         ihu = IHU(interval=_t2b(HELLO_INTERVAL * IHU_MULTIPLIER),
                   rxcost=rxcost, **ll_to_tlv_args(self.ip))
         self.i.queue_tlv(ihu)
-    def process_update_all(self, tlv, rid, nh):
-        rid = rid or self.rid # should not really matter; we share code tho so..
-        assert tlv.metric == INF
-        for p in self.routes.keys():
-            self.process_update(None, tlv, rid, p, nh)
+    def process_update_retract_all(self, tlv):
+        for p, r in self.routes.items():
+            self.process_update(tlv, r['rid'], p, r['nh'])
     def process_update(self, tlv, rid, p, nh):
         assert len(rid) == RID_LEN
         _debug('%s process_update', self)
@@ -335,7 +333,10 @@ class BabelInterface(TLVQueuer):
                     nh = default_nh.get(af, address)
                     self.neighbor(address).process_update(tlv, rid, p, nh)
                 else:
-                    self.neighbor(address).process_update_all(tlv, rid, address)
+                    if tlv.metric != INF:
+                        _error('non-inf metric ae=0 update')
+                        continue
+                    self.neighbor(address).process_update_retract_all(tlv)
             elif isinstance(tlv, RouteReq):
                 self.b.process_route_req_i(self, tlv)
             elif isinstance(tlv, SeqnoReq):

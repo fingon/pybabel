@@ -9,8 +9,8 @@
 # Copyright (c) 2015 Markus Stenberg
 #
 # Created:       Wed Mar 25 10:46:15 2015 mstenber
-# Last modified: Tue Mar 31 21:01:00 2015 mstenber
-# Edit time:     202 min
+# Last modified: Thu Apr  2 10:45:45 2015 mstenber
+# Edit time:     209 min
 #
 """
 
@@ -225,6 +225,16 @@ def test_babel():
 
     assert fs.routes_are_sane()
 
+    # Make sure that we handle ae=0 Update correctly. i.e. state disappears.
+    ifo2 = b2.interface('i2')
+    b1ip = ifo.ip
+    assert ifo2.neighbor(b1ip).routes[prefix]['metric'] < INF
+    ifo2.process_tlvs(b1ip,
+                     [Update(flags=0, omitted=0, interval=1, seqno=124,
+                             metric=INF, ae=0)])
+    assert ifo2.neighbor(b1ip).routes[prefix]['metric'] == INF
+
+
 def test_babel_flap():
     fs = FakeSystem()
     b1 = fs.add_babel()
@@ -256,6 +266,8 @@ def test_babel_flap():
 
     fs.run_until(lambda :len(b2.sys.route_changes), max_iterations=1000)
     assert b2.sys.route_changes == [dict(op=OP_DEL, blackhole=True, prefix=prefix)]
+
+    fs.run_until(lambda :not b2.sources, max_iterations=1000)
 
 def _test_babel_tree(n, brf, ifc):
     fs = FakeSystem()
