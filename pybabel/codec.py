@@ -9,8 +9,8 @@
 # Copyright (c) 2015 Markus Stenberg
 #
 # Created:       Wed Mar 25 05:19:23 2015 mstenber
-# Last modified: Thu Apr  2 10:42:10 2015 mstenber
-# Edit time:     92 min
+# Last modified: Thu Apr  2 10:50:54 2015 mstenber
+# Edit time:     93 min
 #
 """
 
@@ -260,13 +260,13 @@ def split_tlvs_to_tlv_lists(tlvs):
     for tlv in tlvs:
         if isinstance(tlv, RID):
             rid = tlv
-        tl = len(tlv.encode())
+        tl = tlv.wire_size()
         if tl + c > MTU_ISH:
             yield l
             c = 4
             l = []
             if rid and not isinstance(tlv, RID):
-                c += tlv.wire_size()
+                c += rid.wire_size()
                 l.append(rid)
         c += tl
         l.append(tlv)
