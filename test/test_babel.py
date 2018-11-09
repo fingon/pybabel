@@ -9,8 +9,8 @@
 # Copyright (c) 2015 Markus Stenberg
 #
 # Created:       Wed Mar 25 10:46:15 2015 mstenber
-# Last modified: Thu Apr  2 10:45:45 2015 mstenber
-# Edit time:     209 min
+# Last modified: Fri Nov  9 12:58:44 2018 mstenber
+# Edit time:     220 min
 #
 """
 
@@ -23,21 +23,29 @@ topology connections to be made (and unmade) over time.
 
 """
 
-from pybabel.babel import *
-import pybabel.codec
 import collections
+import ipaddress
+import logging
 import random
 
-import logging
+import pybabel.codec as codec
+from pybabel.babel import (IHU_HOLD_TIME_MULTIPLIER, INF, OP_ADD, OP_DEL,
+                           URGENT_JITTER, Babel, SystemInterface)
+from pybabel.codec import (IHU, RID, RID_LEN, AckReq, Hello, RouteReq,
+                           SeqnoReq, Update, ll_to_tlv_args,
+                           prefix_to_tlv_args)
+
 _logger = logging.getLogger(__name__)
 _debug = _logger.debug
 
-DELIVERY_DELAY_MAX=0.2
+DELIVERY_DELAY_MAX = 0.2
 
-orig_decode_error = pybabel.codec._decode_error
+orig_decode_error = codec._decode_error
+
 
 class FakeTimeout:
     done = False
+
     def __init__(self, fs, t, cb, a):
         assert cb is not None
         self.fs = fs
@@ -45,17 +53,21 @@ class FakeTimeout:
         self.cb = cb
         self.a = a
         _debug('%s FakeTimeout %s', self, cb)
+
         def _f(desc, x):
             assert False, 'decode error:%s in %s' % (desc, x)
-        pybabel.codec._decode_error = _f
+        codec._decode_error = _f
+
     def __del__(self):
-        pybabel.codec._decode_error = orig_decode_error
+        codec._decode_error = orig_decode_error
+
     def cancel(self):
         assert not self.done
         assert self in self.fs.timeouts
         _debug('%s FakeTimeout.cancel', self)
         self.fs.timeouts.remove(self)
         self.done = True
+
     def run(self):
         assert not self.done
         assert self in self.fs.timeouts
@@ -64,21 +76,25 @@ class FakeTimeout:
         self.fs.timeouts.remove(self)
         self.done = True
 
+
 class FakeSystem:
     t = 123456789
     sid = 0
+
     def __init__(self):
         self.timeouts = []
         self.babels = []
         self.ip2b = {}
         self.connections = collections.defaultdict(set)
         # (s, ifname) => [(s2, ifname2) list]
+
     def add_babel(self):
         fsi = FakeSystemInterface(self)
         b = Babel(fsi)
         self.babels.append(b)
         fsi.b = b
         return b
+
     def set_connected(self, k1, k2, enabled=True, bidir=False):
         l = self.connections[k1]
         if k2 in l == enabled:
@@ -89,6 +105,7 @@ class FakeSystem:
             l.add(k2)
         if bidir:
             self.set_connected(k2, k1, enabled)
+
     def poll(self):
         while True:
             l = [x for x in self.timeouts if x.t <= self.t]
@@ -97,9 +114,12 @@ class FakeSystem:
             l[0].run()
             # Just run them one by one as I CBA to track the cancel
             # dependencies :p
+
     def next(self):
-        if not self.timeouts: return
+        if not self.timeouts:
+            return
         return min([x.t for x in self.timeouts])
+
     def run_until(self, cb, *a, max_iterations=100):
         iteration = 0
         while not cb(*a):
@@ -111,6 +131,7 @@ class FakeSystem:
             self.poll()
             iteration += 1
             assert iteration < max_iterations
+
     def routes_are_sane(self):
         # Make sure that for any selected routes, they wind up at the
         # source with local_routes set for the prefix
@@ -119,6 +140,7 @@ class FakeSystem:
                 if not self.route_is_sane(b, p):
                     return False
         return True
+
     def route_is_sane(self, b, p, hopcount=64):
         d = b.selected_routes[p]
         n = d.get('n')
@@ -128,6 +150,7 @@ class FakeSystem:
         if not hopcount:
             return
         return self.route_is_sane(self.ip2b[n.ip], p, hopcount-1)
+
     def converged(self):
         bl = self.babels
         # All local routes must be published
@@ -145,7 +168,6 @@ class FakeSystem:
         return True
 
 
-
 class FakeSystemInterface(SystemInterface):
     def __init__(self, fs):
         self.fs = fs
@@ -154,16 +176,21 @@ class FakeSystemInterface(SystemInterface):
         self.sid = fs.sid
         self.ips = {}
         self.route_changes = []
+
     def time(self):
         return self.fs.t
+
     def random(self):
         return random.random()
+
     def call_later(self, dt, cb, *a):
         o = FakeTimeout(self.fs, dt + self.fs.t, cb, a)
         self.fs.timeouts.append(o)
         return o
+
     def get_rid(self):
         return bytes([0] * (RID_LEN-1) + [self.sid])
+
     def get_if_ip(self, ifname):
         self.iid += 1
         a = ipaddress.ip_address('fe80::')
@@ -172,23 +199,27 @@ class FakeSystemInterface(SystemInterface):
         self.ips[ifname] = ip
         self.fs.ip2b[ip] = self.b
         return ip
+
     def send_unicast(self, ifname, ip, b):
-        for k in self.fs.connections[self,ifname]:
+        for k in self.fs.connections[self, ifname]:
             (s2, ifname2) = k
             if s2.ips[ifname2] != ip:
                 continue
             d = random.random() * DELIVERY_DELAY_MAX
             self.call_later(d, s2.b.process_inbound,
                             ifname2, self.ips[ifname], b)
+
     def send_multicast(self, ifname, b):
-        for k in self.fs.connections[self,ifname]:
+        for k in self.fs.connections[self, ifname]:
             (s2, ifname2) = k
             d = random.random() * DELIVERY_DELAY_MAX
             self.call_later(d, s2.b.process_inbound,
                             ifname2, self.ips[ifname], b)
+
     def set_route(self, **kw):
         _debug('%s set_route %s', self, kw)
         self.route_changes.append(kw)
+
 
 def test_babel():
     fs = FakeSystem()
@@ -230,8 +261,8 @@ def test_babel():
     b1ip = ifo.ip
     assert ifo2.neighbor(b1ip).routes[prefix]['metric'] < INF
     ifo2.process_tlvs(b1ip,
-                     [Update(flags=0, omitted=0, interval=1, seqno=124,
-                             metric=INF, ae=0)])
+                      [Update(flags=0, omitted=0, interval=1, seqno=124,
+                              metric=INF, ae=0)])
     assert ifo2.neighbor(b1ip).routes[prefix]['metric'] == INF
 
 
@@ -240,7 +271,6 @@ def test_babel_flap():
     b1 = fs.add_babel()
     b2 = fs.add_babel()
     prefix = ipaddress.ip_network('2001:db8::/32')
-    prefix2 = ipaddress.ip_network('fe80::/64')
     addr = ipaddress.ip_address('fe80::101')
     b1.local_routes.add(prefix)
     b1.interface('i1')
@@ -252,11 +282,12 @@ def test_babel_flap():
 
     assert len(b1.sys.route_changes) == 0
     assert len(b2.sys.route_changes) == 1
-    assert b2.sys.route_changes == [dict(op=OP_ADD, prefix=prefix, ifname='i2', nh=addr)]
+    assert b2.sys.route_changes == [
+        dict(op=OP_ADD, prefix=prefix, ifname='i2', nh=addr)]
     b2.sys.route_changes = []
 
     fs.set_connected((b1.sys, 'i1'), (b2.sys, 'i2'), False)
-    fs.run_until(lambda :not fs.converged())
+    fs.run_until(lambda: not fs.converged())
 
     assert len(b1.sys.route_changes) == 0
     assert len(b2.sys.route_changes) == 2
@@ -264,10 +295,12 @@ def test_babel_flap():
                                     dict(op=OP_ADD, blackhole=True, prefix=prefix)]
     b2.sys.route_changes = []
 
-    fs.run_until(lambda :len(b2.sys.route_changes), max_iterations=1000)
-    assert b2.sys.route_changes == [dict(op=OP_DEL, blackhole=True, prefix=prefix)]
+    fs.run_until(lambda: len(b2.sys.route_changes), max_iterations=1000)
+    assert b2.sys.route_changes == [
+        dict(op=OP_DEL, blackhole=True, prefix=prefix)]
 
-    fs.run_until(lambda :not b2.sources, max_iterations=1000)
+    fs.run_until(lambda: not b2.sources, max_iterations=1000)
+
 
 def _test_babel_tree(n, brf, ifc):
     fs = FakeSystem()
@@ -287,11 +320,14 @@ def _test_babel_tree(n, brf, ifc):
     assert fs.routes_are_sane()
     return fs
 
+
 def test_babel_tree_small():
     _test_babel_tree(7, 2, 1)
 
+
 def _test_babel_tree_small_2():
     _test_babel_tree(7, 2, 2)
+
 
 def _test_babel_tree_big():
     _test_babel_tree(13, 5, 3)
@@ -301,6 +337,7 @@ fakea = ipaddress.ip_address('fe80::1')
 fakea2 = ipaddress.ip_address('fe80::2')
 uiname = 'up'
 diname = 'down0'
+
 
 def test_rfc6126_must():
     fs = _test_babel_tree(3, 2, 1)
@@ -331,14 +368,15 @@ def test_rfc6126_must():
     # be selected
     # (implied strongly; valid_selected_routes)
 
-
     # 3.1: 3.7.2 updates MUST be sent in timely manner
     # 3.7.2: MUST send a triggered update if rid changes for dest
-    if bdi.tlv_q: bdi.tlv_send_timer()
+    if bdi.tlv_q:
+        bdi.tlv_send_timer()
     rprefix = list(b2.local_routes)[0]
     fakerid = b'12345678'
     bdi.process_tlvs(fakea, [Hello(seqno=123, interval=1),
-                             IHU(rxcost=1, interval=1, **ll_to_tlv_args(bdi.ip)),
+                             IHU(rxcost=1, interval=1, **
+                                 ll_to_tlv_args(bdi.ip)),
                              RID(rid=fakerid),
                              Update(flags=0, omitted=0, interval=1, seqno=123,
                                     metric=1, **prefix_to_tlv_args(rprefix))])
@@ -381,7 +419,8 @@ def test_rfc6126_must():
 
     # 3.8.1.2 SHOULD forward if hopcount>1
     for n in bdi.neighs.values():
-        if n.tlv_q: n.tlv_send_timer()
+        if n.tlv_q:
+            n.tlv_send_timer()
     bdi.process_tlvs(fakea2, [SeqnoReq(hopcount=5, rid=fakerid, seqno=124,
                                        **prefix_to_tlv_args(rprefix))])
     assert not bdi.tlv_q
@@ -424,7 +463,6 @@ def test_rfc6126_must():
     assert len(l) >= 1, bui.tlv_q
     assert l[-1].seqno == b2.seqno + 1
 
-
     bdi.tlv_send_timer()
 
     # 4: MUST be ignored if SA != linklocal
@@ -448,10 +486,10 @@ def test_rfc6126_must():
 
     # encode/decode MUSTs covered in test_codec
 
+
 def test_rfc6126_should():
     fs = _test_babel_tree(3, 2, 1)
     (b0, b1, b2) = fs.babels
-    bui = b0.interface(uiname)
     bdi = b0.interface(diname)
 
     _debug('test_rfc6126_should setup done')
@@ -491,8 +529,6 @@ def test_rfc6126_should():
     # force it first
     b0.update_timer()
 
-    bdin = bdi.neighbor(fakea)
-
     b1ip = b1.interface(uiname).ip
     assert not bdi.neighbor(b1ip).tlv_q
     rprefix = list(b2.local_routes)[0]
@@ -504,6 +540,7 @@ def test_rfc6126_should():
     assert bdi.neighbor(b1ip).tlv_q
 
     # 3.8.2.3: SHOULD send unicast route req 'shortly' before expiration
+
 
 def test_update_flag_40():
     fs = FakeSystem()
@@ -521,7 +558,6 @@ def test_github_issue_4():
     fs = FakeSystem()
     b = fs.add_babel()
     i = b.interface('x')
-    fakep = ipaddress.ip_network('dead:beef:1:2:3:4:5:6/128')
     fake_ihu_interval = 100
 
     tlvs = [Hello(seqno=123, interval=fake_ihu_interval),
@@ -531,6 +567,6 @@ def test_github_issue_4():
     # The issue was that _after_ the IHU had timed out (no message
     # within interval), receiving another IHU caused a boom. So wait a bit.
     et = fs.t + fake_ihu_interval * IHU_HOLD_TIME_MULTIPLIER * 3 / 2
-    fs.run_until(lambda :fs.t >= et, max_iterations=1000)
+    fs.run_until(lambda: fs.t >= et, max_iterations=1000)
 
     i.process_tlvs(fakea, tlvs)
