@@ -9,7 +9,7 @@
 # Copyright (c) 2015 Markus Stenberg
 #
 # Created:       Wed Mar 25 21:53:19 2015 mstenber
-# Last modified: Tue Mar 31 18:12:35 2015 mstenber
+# Last modified: Fri Nov  9 13:06:51 2018 mstenber
 # Edit time:     180 min
 #
 """
@@ -18,18 +18,18 @@ Leveraging the pybabel module, minimalist routing daemon.
 
 """
 
-from pybabel.babel import SystemInterface, Babel, OP_ADD, OP_DEL, RID_LEN
-
-import time
-import random
-import os
-import socket
 import ipaddress
-import struct
-import select
-import re
-
 import logging
+import os
+import random
+import re
+import select
+import socket
+import struct
+import time
+
+from pybabel.babel import RID_LEN, Babel, SystemInterface
+
 _logger = logging.getLogger(__name__)
 _debug = _logger.debug
 
@@ -40,8 +40,10 @@ IMPORT_INTERVAL = 30
 
 protocol = None
 
+
 class Timeout:
     done = False
+
     def __init__(self, lsi, t, cb, a):
         assert cb is not None
         self.lsi = lsi
@@ -49,12 +51,14 @@ class Timeout:
         self.cb = cb
         self.a = a
         _debug('%s Timeout %s', self, cb)
+
     def cancel(self):
         assert not self.done
         assert self in self.lsi.timeouts
         _debug('%s Timeout.cancel', self)
         self.lsi.timeouts.remove(self)
         self.done = True
+
     def run(self):
         assert not self.done
         assert self in self.lsi.timeouts
@@ -63,6 +67,7 @@ class Timeout:
         self.lsi.timeouts.remove(self)
         self.done = True
 
+
 class LinuxSystemInterface(SystemInterface):
     def __init__(self):
         self.timeouts = []
@@ -70,11 +75,15 @@ class LinuxSystemInterface(SystemInterface):
         self.system('ip -6 route flush proto 42')
     time = time.time
     random = random.random
+
     def add_reader(self, s, cb):
         self.readers[s] = cb
+
     def next(self):
-        if not self.timeouts: return
+        if not self.timeouts:
+            return
         return min([x.t for x in self.timeouts])
+
     def poll(self):
         while True:
             t = time.time()
@@ -84,6 +93,7 @@ class LinuxSystemInterface(SystemInterface):
             l[0].run()
             # Just run them one by one as I CBA to track the cancel
             # dependencies :p
+
     def loop(self):
         while True:
             self.poll()
@@ -91,34 +101,44 @@ class LinuxSystemInterface(SystemInterface):
             if to < 0.01:
                 to = 0.01
             _debug('select %s %s', self.readers.keys(), to)
-            (rlist, wlist, xlist) = select.select(self.readers.keys(), [], [], to)
+            (rlist, wlist, xlist) = select.select(
+                self.readers.keys(), [], [], to)
             _debug('readable %s', rlist)
             for fd in rlist:
                 self.readers[fd]()
+
     def call_later(self, dt, cb, *a):
         o = Timeout(self, dt + self.time(), cb, a)
         self.timeouts.append(o)
         return o
+
     def get_rid(self):
         l = list(os.popen('ip link | grep link/ether').readlines())
         if not l:
             return bytes([random.randint(0, 255) for x in range(RID_LEN)])
         d = l[0].strip().split(' ')[1]
         b = bytes([int(x, 16) for x in d.split(':')])
-        if len(b) < RID_LEN: b = bytes(RID_LEN-len(b)) + b
+        if len(b) < RID_LEN:
+            b = bytes(RID_LEN-len(b)) + b
         return b
+
     def get_if_ip(self, ifname):
         l = list(os.popen('ip -6 addr show dev %s | grep "scope link"' % ifname))
         assert l
         return ipaddress.ip_address(l[0].strip().split(' ')[1].split('/')[0])
+
     def send_multicast(self, ifname, b):
         self.send_unicast(ifname, BABEL_GROUP, b)
+
     def send_unicast(self, ifname, ip, b):
-        if isinstance(ip, ipaddress.IPv6Address): ip = ip.compressed
-        if isinstance(ip, ipaddress.IPv4Address): return # no v4!
+        if isinstance(ip, ipaddress.IPv6Address):
+            ip = ip.compressed
+        if isinstance(ip, ipaddress.IPv4Address):
+            return  # no v4!
         _debug('send_unicast %s%%%s %d bytes' % (ip, ifname, len(b)))
         ifindex = socket.if_nametoindex(ifname)
         babel.interface(ifname).s.sendto(b, (ip, BABEL_PORT, 0, ifindex))
+
     def set_route(self, op, prefix, blackhole=False, ifname=None, nh=None):
         af = isinstance(prefix, ipaddress.IPv4Network) and "-4" or "-6"
         if blackhole:
@@ -126,9 +146,11 @@ class LinuxSystemInterface(SystemInterface):
         else:
             cmd = 'ip %(af)s route %(op)s %(prefix)s via %(nh)s dev %(ifname)s proto 42' % locals()
         self.system(cmd)
+
     def system(self, cmd):
         print('# %s' % cmd)
         os.system(cmd)
+
 
 def setup_babel(iflist):
     addrinfo = socket.getaddrinfo(BABEL_GROUP, None)[0]
@@ -136,6 +158,7 @@ def setup_babel(iflist):
     s = socket.socket(family=socket.AF_INET6, type=socket.SOCK_DGRAM)
     s.bind(('', BABEL_PORT))
     s.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_MULTICAST_LOOP, False)
+
     def _f():
         data, addr = s.recvfrom(2**16)
         ads, ifname = addr[0].split('%')
@@ -150,7 +173,6 @@ def setup_babel(iflist):
         s.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_JOIN_GROUP, mreq)
 
 
-
 def _import_timer(relist):
     _debug('_import_timer')
     local_routes = set()
@@ -163,7 +185,8 @@ def _import_timer(relist):
             _debug('no match')
             continue
         dst = line.strip().split()[0]
-        if dst == 'default': dst = '::/0'
+        if dst == 'default':
+            dst = '::/0'
         local_routes.add(ipaddress.ip_network(dst))
     if babel.local_routes != local_routes:
         _debug('updating local routes to %s', local_routes)
@@ -171,11 +194,13 @@ def _import_timer(relist):
         babel.route_selection()
     sys.call_later(IMPORT_INTERVAL, _import_timer, relist)
 
+
 if __name__ == '__main__':
     import argparse
     ap = argparse.ArgumentParser()
     ap.add_argument('-i', '--import-re', action='append', help='Import regexp')
-    ap.add_argument('-d', '--debug', action='store_true', help='Enable debugging')
+    ap.add_argument('-d', '--debug', action='store_true',
+                    help='Enable debugging')
     ap.add_argument('ifname',
                     nargs='+',
                     help="Interfaces to listen on.")
